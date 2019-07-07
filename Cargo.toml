@@ -1,0 +1,19 @@
+[package]
+name = "finance_gui"
+version = "0.1.0"
+authors = ["Eric"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand = "0.7.0"
+hyper = "0.12.31"
+
+[dependencies.gtk]
+version = "0.7.0"
+features = ["v3_22"]
+
+[dependencies.gio]
+version = "0.7.0"
+#features = ["v2_44"]
