@@ -54,6 +54,7 @@ struct Params {
 #[derive(Debug, Serialize, Clone)]
 struct AuthParams {
     access_token: Option<String>,
+    #[serde(skip_serializing_if="Option::is_none")]
     item_id: Option<String>,
     secret: String,
     client_id: String,
@@ -221,14 +222,25 @@ impl ClientHandle {
     fn get_transactions(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
         let url = "https://sandbox.plaid.com/transactions/get";
         let json = json!({
-            "start_date": "2019-01-07",
-            "end_date": "2019-14-07",
+            "start_date": "2019-07-01",
+            "end_date": "2019-07-14",
             "options": Map::new()
         });
         let json_str = self.auth_params.add_json(&json); 
         println!("Getting transactions: {}", json_str);
         self.post_json(&json_str, url).and_then(|resp_json| {
-            self.result = resp_json.as_str().expect("json parse err").to_string(); 
+            self.result = serde_json::to_string_pretty(&resp_json).expect("json parse err");
+            Ok(self)
+        })
+    }
+
+    fn get_balance(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
+        let url = "https://sandbox.plaid.com/accounts/balance/get";
+        self.auth_params.item_id = None;
+        let json_str = serde_json::to_string_pretty(&self.auth_params).unwrap(); 
+        println!("Getting balance: {}", json_str);
+        self.post_json(&json_str, url).and_then(|resp_json| {
+            self.result = serde_json::to_string_pretty(&resp_json).expect("json parse err");
             Ok(self)
         })
     }
@@ -247,9 +259,9 @@ pub fn run_plaid() -> Result<(), Box<Error>> {
             let item_id = ch.auth_params.item_id.clone().unwrap(); 
             println!("Access Token: {}, Item Id: {}", access_token, item_id);
             ch.headers.insert("Plaid-Version", HeaderValue::from_static(API_VERSION));
-            ch.headers.insert("User-Agent", HeaderValue::from_static("Plaid Go v2.0.0"));
             ch.headers.remove("Plaid-Link-Version");
-            ch.get_transactions()
+            sleep(std::time::Duration::from_millis(1000))
+                .map_err(|e| panic!("{}", e)).and_then(|_| ch.get_transactions())
         }).and_then(|ch| {
             println!("{}", ch.result);
             Ok(())
