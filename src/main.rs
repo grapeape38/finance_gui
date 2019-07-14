@@ -29,11 +29,7 @@ fn build_ui(application: &gtk::Application) {
 }
 
 fn main() {
-    match run_plaid() {
-        Ok(()) => {}
-        Err(e) => println!("Error: {}", e)
-    };
-    /*
+   /*
     let application =
         gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
             .expect("Initialization failed...");
@@ -43,4 +39,8 @@ fn main() {
     });
 
     application.run(&args().collect::<Vec<_>>());*/
+    match run_plaid() {
+        Ok(()) => {}
+        Err(e) => println!("Error: {}", e)
+    };
 }
