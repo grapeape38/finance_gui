@@ -91,7 +91,7 @@ impl Params {
 }
 
 impl AuthParams {
-    fn new() -> Result<AuthParams, Box<Error>> {
+    pub fn new() -> Result<AuthParams, Box<Error>> {
         let client_id = env::var("PLAID_CLIENT_ID")?;
         let secret = env::var("PLAID_SECRET")?;
         Ok(AuthParams {
@@ -142,13 +142,31 @@ impl ClientHandle {
         LINK_HEADERS.iter().for_each(|h| {
             headers.insert(h.0, HeaderValue::from_static(h.1));
         });
-        let https = HttpsConnector::new(4).unwrap();
+        let https = HttpsConnector::new(4)?;
         let client = Client::builder().build::<_, hyper::Body>(https);
         Ok(ClientHandle {
             params: Params::new()?,
             auth_params: AuthParams::new()?,
-            headers: headers,
-            client: client,
+            headers,
+            client,
+            result: "".to_string()
+        })
+    }
+    
+    pub fn from_auth(auth: AuthParams) -> Result<ClientHandle, Box<Error>> {
+        let mut headers = HeaderMap::new();
+        LINK_HEADERS.iter().for_each(|h| {
+            headers.insert(h.0, HeaderValue::from_static(h.1));
+        });
+        headers.insert("Plaid-Version", HeaderValue::from_static(API_VERSION));
+        headers.remove("Plaid-Link-Version");
+        let https = HttpsConnector::new(4)?;
+        let client = Client::builder().build::<_, hyper::Body>(https);
+        Ok(ClientHandle {
+            params: Params::new()?,
+            auth_params: auth,
+            headers,
+            client,
             result: "".to_string()
         })
     }

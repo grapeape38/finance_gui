@@ -8,15 +8,23 @@ use gtk::prelude::*;
 
 use std::env::args;
 use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::collections::HashMap;
 
 mod plaid;
-use plaid::{ClientHandle, get_access_token, API_VERSION};
+use plaid::{ClientHandle, get_access_token, AuthParams, API_VERSION};
 
 use tokio_timer::{sleep};
 use hyper::header::{HeaderValue};
 
-fn build_ui(application: &gtk::Application) {
+/*struct AppState<'a> {
+    application: &'a gtk::Application,
+    window: Arc<Mutex<gtk::ApplicationWindow>>,
+    buttons: HashMap<String, gtk::Button>
+    auth_params: Arc<Mutex<gtk::AuthParams>>
+};*/
+
+fn build_ui(application: &gtk::Application) /*-> AppState*/ {
     let window = gtk::ApplicationWindow::new(application);
 
     window.set_title("First GTK+ Program");
@@ -35,40 +43,48 @@ fn build_ui(application: &gtk::Application) {
     window.show_all();
 }
 
-fn run() -> Result<(), Box<Error>> {
-    rt::run(rt::lazy(|| {
+fn run() -> Result<AuthParams, Box<Error>> {
+    let auth_mut = Arc::new(Mutex::new(AuthParams::new()?));
+    let auth_mut2 = Arc::clone(&auth_mut);
+    rt::run(rt::lazy(move || {
+        /*let application =
+            gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
+                .expect("Initialization failed...");
+
+        application.connect_activate(|app| {
+            build_ui(app);
+        });
+
+        application.connect_shutdown(|_| {
+            println!("I am shutting down!");
+        });
+
+        application.run(&args().collect::<Vec<_>>());*/
+
         let ch = ClientHandle::new().unwrap();
-        //let ch_mut = Arc::new(Mutex::new(ch));
-        get_access_token(ch).and_then(|mut ch| {
+
+        get_access_token(ch).and_then(move |ch| {
             let access_token = ch.auth_params.access_token.clone().unwrap(); 
             let item_id = ch.auth_params.item_id.clone().unwrap(); 
+            *auth_mut.lock().unwrap() = ch.auth_params;
+            Ok(())
+            /*
             println!("Access Token: {}, Item Id: {}", access_token, item_id);
-            ch.headers.insert("Plaid-Version", HeaderValue::from_static(API_VERSION));
-            ch.headers.remove("Plaid-Link-Version");
             sleep(std::time::Duration::from_millis(1000))
                 .map_err(|e| panic!("{}", e)).and_then(|_| ch.get_transactions())
-        }).and_then(|ch| {
-            println!("{}", ch.result);
-            Ok(())
-        }).map_err(|e| {
+            }).and_then(|ch| {
+                println!("{}", ch.result);
+                Ok(())*/
+            }).map_err(|e| {
             panic!("Error: {}", e)
         })
     }));
-    Ok(())
+    Ok(Arc::try_unwrap(auth_mut2).unwrap().into_inner().unwrap())
 }
 
 fn main() {
-    /*let application =
-        gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
-            .expect("Initialization failed...");
-
-    application.connect_activate(|app| {
-        build_ui(app);
-    });
-
-    application.run(&args().collect::<Vec<_>>());*/
     match run() {
-        Ok(()) => {}
+        Ok(auth_params) => { println!("Access token: {}", auth_params.access_token.unwrap()); }
         Err(e) => println!("Error: {}", e)
     };
 }
