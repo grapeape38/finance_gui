@@ -8,7 +8,7 @@ use hyper::client::{HttpConnector};
 use hyper::header::{HeaderValue, HeaderMap};
 use hyper::rt::{self, Future, Stream};
 use hyper_tls::HttpsConnector;
-use std::env;
+use std::{env, fmt};
 use std::error::Error;
 use serde::{Serialize, Deserialize, de};
 use serde_json::{json, Value, Map};
@@ -23,7 +23,7 @@ const CREDENTIALS: Credentials =
     };
 
 #[derive(Debug, Serialize, Clone)]
-struct Params {
+pub struct Params {
     link_persistent_id: String,
     link_open_id: String,
     public_key: String,
@@ -43,7 +43,7 @@ struct Params {
     #[serde(skip_serializing_if="Option::is_none")]
     flexible_input_responses: Option<Value>,
     #[serde(skip_serializing_if="Option::is_none")]
-    credentials: Option<Credentials>,
+    pub credentials: Option<Credentials>,
     #[serde(skip_serializing_if="Option::is_none")]
     public_token: Option<String>
 }
@@ -112,8 +112,8 @@ impl AuthParams {
 }
 
 #[derive(Debug, Serialize, Clone)]
-struct Credentials {
-    username: &'static str,
+pub struct Credentials {
+    pub username: &'static str,
     password: &'static str,
 }
 
@@ -130,10 +130,10 @@ type HttpsClient = Client<HttpsConnector<HttpConnector>>;
 #[derive(Debug)]
 pub struct ClientHandle {
     pub headers: HeaderMap,
-    params: Params,
+    pub params: Params,
     pub auth_params: AuthParams,
+    pub json_result: Option<Value>,
     client: HttpsClient,
-    pub result: String
 }
 
 impl ClientHandle {
@@ -148,29 +148,12 @@ impl ClientHandle {
             params: Params::new()?,
             auth_params: AuthParams::new()?,
             headers,
+            json_result: None,
             client,
-            result: "".to_string()
-        })
-    }
-    
-    pub fn from_auth(auth: AuthParams) -> Result<ClientHandle, Box<Error>> {
-        let mut headers = HeaderMap::new();
-        LINK_HEADERS.iter().for_each(|h| {
-            headers.insert(h.0, HeaderValue::from_static(h.1));
-        });
-        headers.insert("Plaid-Version", HeaderValue::from_static(API_VERSION));
-        headers.remove("Plaid-Link-Version");
-        let https = HttpsConnector::new(4)?;
-        let client = Client::builder().build::<_, hyper::Body>(https);
-        Ok(ClientHandle {
-            params: Params::new()?,
-            auth_params: auth,
-            headers,
-            client,
-            result: "".to_string()
         })
     }
 
+    
     fn post_json(&self, json: &str, uri: &str) -> impl Future<Item=Value, Error=hyper::Error> {
         let uri: hyper::Uri = uri.parse().unwrap();
         let mut req = Request::new(Body::from(json.to_string()));
@@ -186,6 +169,7 @@ impl ClientHandle {
             })
     }
 
+    
     pub fn get_session_id(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
         let json = serde_json::to_string_pretty(&self.params).unwrap();
         println!("Getting session id, json: {}", json);
@@ -196,6 +180,7 @@ impl ClientHandle {
         })
     }
 
+    
     pub fn get_public_token(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
         self.params.link_version = None;
         self.params.country_codes = None;
@@ -213,6 +198,7 @@ impl ClientHandle {
         })
     }
 
+    
     pub fn exchange_public_token(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
         let url = "https://sandbox.plaid.com/item/public_token/exchange";
         let json = json!({
@@ -223,20 +209,26 @@ impl ClientHandle {
         let json_str = serde_json::to_string_pretty(&json).expect("pub token json err");
         println!("Getting access token, json: {}", json_str);
         self.post_json(&json_str, url).and_then(|resp_json| {
+            self.json_result = Some(resp_json.clone());
             self.auth_params.access_token = Some(resp_json["access_token"].as_str().expect("failed to get public token").to_string());
             self.auth_params.item_id = Some(resp_json["item_id"].as_str().expect("failed to get item id").to_string());
             Ok(self)
         })
     }
 
+    
     fn api_call(mut self, url: &str, json: Value) -> impl Future<Item=Self, Error=hyper::Error> {
+        self.json_result = None;
         let json_str = self.auth_params.add_json(&json); 
-        self.post_json(&json_str, url).and_then(|resp_json| {
-            self.result = serde_json::to_string_pretty(&resp_json).expect("json parse err");
+        self.post_json(&json_str, url).and_then(|json| {
+            self.json_result = Some(json);
             Ok(self)
-        })
+        })/*.and_then(|resp_json| {
+            Ok(serde_json::to_string_pretty(&resp_json).expect("json parse err"));
+        })*/
     }
 
+    
     pub fn get_transactions(self) -> impl Future<Item=Self, Error=hyper::Error> {
         let url = "https://sandbox.plaid.com/transactions/get";
         let json = json!({
@@ -253,10 +245,13 @@ impl ClientHandle {
     }
 }
 
-pub fn get_access_token(ch: ClientHandle) -> impl Future<Item=ClientHandle, Error=hyper::Error> {
+
+pub fn get_access_token() -> impl Future<Item=ClientHandle, Error=hyper::Error> {
+    let ch = ClientHandle::new().unwrap();
     ch.get_session_id()
         .and_then(|ch| {
         ch.get_public_token()
     }).and_then(|ch| {
-        ch.exchange_public_token()})
+        ch.exchange_public_token()
+    })
 }

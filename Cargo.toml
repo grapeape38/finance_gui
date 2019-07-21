@@ -13,11 +13,4 @@ hyper-tls = "0.3.2"
 tokio-timer = "0.2.11"
 serde = { version = "1.0.94", features = ["derive"] }
 serde_json = "1.0.40"
-
-[dependencies.gtk]
-version = "0.7.0"
-features = ["v3_22"]
-
-[dependencies.gio]
-version = "0.7.0"
-#features = ["v2_44"]
+azul = { git = "https://github.com/maps4print/azul" }
