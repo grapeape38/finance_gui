@@ -2,19 +2,18 @@ extern crate hyper;
 extern crate rand;
 
 use rand::{Rng};
-use tokio_timer::{sleep};
-use hyper::{Client, Method, Body, Request, Response};
+use hyper::{Client, Method, Body, Request};
 use hyper::client::{HttpConnector};
 use hyper::header::{HeaderValue, HeaderMap};
-use hyper::rt::{self, Future, Stream};
+use hyper::rt::{Future, Stream};
 use hyper_tls::HttpsConnector;
-use std::{env, fmt};
+use std::{env};
 use std::error::Error;
-use serde::{Serialize, Deserialize, de};
+use serde::{Serialize};
 use serde_json::{json, Value, Map};
 
 const LINK_VERSION: &'static str = "2.0.264";
-pub const API_VERSION: &'static str = "2019-05-29";
+//pub const API_VERSION: &'static str = "2019-05-29";
 
 const CREDENTIALS: Credentials =
     Credentials {
@@ -132,7 +131,6 @@ pub struct ClientHandle {
     pub headers: HeaderMap,
     pub params: Params,
     pub auth_params: AuthParams,
-    pub json_result: Option<Value>,
     client: HttpsClient,
 }
 
@@ -148,11 +146,9 @@ impl ClientHandle {
             params: Params::new()?,
             auth_params: AuthParams::new()?,
             headers,
-            json_result: None,
             client,
         })
     }
-
     
     fn post_json(&self, json: &str, uri: &str) -> impl Future<Item=Value, Error=hyper::Error> {
         let uri: hyper::Uri = uri.parse().unwrap();
@@ -168,7 +164,6 @@ impl ClientHandle {
                 Ok(resp_json)
             })
     }
-
     
     pub fn get_session_id(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
         let json = serde_json::to_string_pretty(&self.params).unwrap();
@@ -199,7 +194,7 @@ impl ClientHandle {
     }
 
     
-    pub fn exchange_public_token(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
+    pub fn exchange_public_token(&self) -> impl Future<Item=Value, Error=hyper::Error> {
         let url = "https://sandbox.plaid.com/item/public_token/exchange";
         let json = json!({
             "public_token": self.params.public_token.clone().unwrap(),
@@ -208,28 +203,16 @@ impl ClientHandle {
         });
         let json_str = serde_json::to_string_pretty(&json).expect("pub token json err");
         println!("Getting access token, json: {}", json_str);
-        self.post_json(&json_str, url).and_then(|resp_json| {
-            self.json_result = Some(resp_json.clone());
-            self.auth_params.access_token = Some(resp_json["access_token"].as_str().expect("failed to get public token").to_string());
-            self.auth_params.item_id = Some(resp_json["item_id"].as_str().expect("failed to get item id").to_string());
-            Ok(self)
-        })
+        self.post_json(&json_str, url)
     }
 
     
-    fn api_call(mut self, url: &str, json: Value) -> impl Future<Item=Self, Error=hyper::Error> {
-        self.json_result = None;
+    fn api_call(&self, url: &str, json: Value) -> impl Future<Item=Value, Error=hyper::Error> {
         let json_str = self.auth_params.add_json(&json); 
-        self.post_json(&json_str, url).and_then(|json| {
-            self.json_result = Some(json);
-            Ok(self)
-        })/*.and_then(|resp_json| {
-            Ok(serde_json::to_string_pretty(&resp_json).expect("json parse err"));
-        })*/
+        self.post_json(&json_str, url)
     }
-
     
-    pub fn get_transactions(self) -> impl Future<Item=Self, Error=hyper::Error> {
+    pub fn get_transactions(&self) -> impl Future<Item=Value, Error=hyper::Error> {
         let url = "https://sandbox.plaid.com/transactions/get";
         let json = json!({
             "start_date": "2019-07-01",
@@ -239,14 +222,14 @@ impl ClientHandle {
         self.api_call(url, json)
     }
 
-    pub fn get_balance(self) -> impl Future<Item=Self, Error=hyper::Error> {
+    pub fn get_balance(&self) -> impl Future<Item=Value, Error=hyper::Error> {
         let url = "https://sandbox.plaid.com/accounts/balance/get";
         self.api_call(url, Map::new().into())
     }
 }
 
 
-pub fn get_access_token() -> impl Future<Item=ClientHandle, Error=hyper::Error> {
+pub fn get_access_token() -> impl Future<Item=Value, Error=hyper::Error> {
     let ch = ClientHandle::new().unwrap();
     ch.get_session_id()
         .and_then(|ch| {
