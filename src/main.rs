@@ -248,6 +248,7 @@ fn build_ui(application: &gtk::Application, data: DataPtr) {
     window.set_border_width(10);
     window.set_position(gtk::WindowPosition::Center);
     window.set_default_size(350, 70);
+    let data2 = Rc::clone(&data);
     if data.borrow().signed_in {
         let button = gtk::Button::new_with_label("Sign in");
         button.connect_clicked(move |_| {
