@@ -7,7 +7,7 @@ use crate::gui;
 
 use hyper::rt::{self, Future, Stream};
 
-use gui::AppState;
+use gui::{AppPtr, build_ui};
 use gio::prelude::*;
 use gtk::{prelude::*, timeout_add_seconds};
 use serde_json::{Value};
@@ -32,13 +32,13 @@ enum RequestStatus {
 }
 
 #[derive(Debug, Clone)]
-struct Request {
+pub struct Request {
     req_type: RequestType,
     req_status: RequestStatus 
 }
 
 impl Request {
-    fn arc_none() -> Arc<Mutex<Request>> {
+    pub fn arc_none() -> Arc<Mutex<Request>> {
         Arc::new(Mutex::new(Request { 
             req_type: RequestType::None,
             req_status: RequestStatus::None
@@ -54,7 +54,7 @@ pub struct DataModel {
 }
 
 impl DataModel {
-    fn new() -> DataModel {
+    pub fn new() -> DataModel {
         DataModel {
             signed_in: false,
             auth_params: AuthParams::new().unwrap(),
@@ -65,7 +65,6 @@ impl DataModel {
 }
 
 pub type DataPtr = Rc<RefCell<DataModel>>;
-type AppPtr<'a> = Rc<RefCell<AppState<'a>>>;
 
 pub fn create_model() -> DataPtr {
     Rc::new(RefCell::new(DataModel::new()))
@@ -108,23 +107,23 @@ fn make_call_async<F>(request: Arc<Mutex<Request>>, call: F)
     }));
 }
 
-fn handle_response_ok(state: DataPtr, req_type: RequestType, json: Value) {
+fn handle_response_ok(state: AppPtr, req_type: RequestType, json: Value) {
     let mut state = state.borrow_mut();
     match req_type {
         RequestType::None=> { },
         RequestType::SignIn => {
-            state.signed_in = true;
-            state.auth_params.access_token = Some(json["access_token"].as_str().expect("failed to get public token").to_string());
-            state.auth_params.item_id = Some(json["item_id"].as_str().expect("failed to get item id").to_string());
+            state.data.signed_in = true;
+            state.data.auth_params.access_token = Some(json["access_token"].as_str().expect("failed to get public token").to_string());
+            state.data.auth_params.item_id = Some(json["item_id"].as_str().expect("failed to get item id").to_string());
         },
         RequestType::GetTransactions => {
-            state.transactions = Some(json);
+            state.data.transactions = Some(json);
         }
     }
 }
 
-fn poll_response(state: DataPtr) -> Continue {
-    let req_clone = state.borrow().request.modify_clone(|st| {
+fn poll_response(state: AppPtr) -> Continue {
+    let req_clone = state.borrow().async_request.modify_clone(|st| {
         st.clone()
     });
     if let Some(req_clone) = req_clone {
@@ -146,12 +145,12 @@ fn poll_response(state: DataPtr) -> Continue {
     return Continue(true);
 }
 
-pub fn sign_in(state: DataPtr) {
-    state.borrow_mut().request.modify(|req| {
+pub fn sign_in(state: AppPtr) {
+    state.borrow_mut().async_request.modify(|req| {
         req.req_type = RequestType::SignIn;
         req.req_status = RequestStatus::InProgress;
     });
-    make_call_async(Arc::clone(&state.borrow().request), get_access_token());
+    make_call_async(Arc::clone(&state.borrow().async_request), get_access_token());
     timeout_add_seconds(1, move || {
         poll_response(Rc::clone(&state))
     });

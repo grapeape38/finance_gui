@@ -20,50 +20,81 @@ macro_rules! make_widget {
     }
 }
 
-pub struct AppState {
-    pub data: DataModel,
-    pub async_request: Arc<Mutex<Request>>,
-    ui_tree: Option<Component>,
-    gui: GuiState
+struct Callback {
+
 }
 
-pub type AppPtr = Rc<RefCell<AppState>>;
-
-struct GuiState {
-    window: Rc<gtk::ApplicationWindow>,
-    widgets: HashMap<String, Rc<Widget>>,
+trait MyWidgetExt {
+    fn new(attributes: &HashMap<String, String>) -> Self where Self: Sized;
 }
+
+impl MyWidgetExt for gtk::Button {
+    fn new(attributes: &HashMap<String, String>) -> gtk::Button {
+        if let Some(ref label) = attributes.get("label") {
+            gtk::Button::new_with_label(label)
+        }
+        else {
+            gtk::Button::new()
+        }
+    }
+}
+
+impl MyWidgetExt for gtk::Label {
+    fn new(attributes: &HashMap<String, String>) -> gtk::Label {
+        gtk::Label::new_with_mnemonic(attributes.get("mnemonic").map(|s| &**s))
+    }
+}
+
+/*struct MyWidget<C: MyWidgetExt> {
+    attributes: HashMap<String, String>,
+    callbacks: HashSet<String, Callback>
+    widget: C
+}
+impl MyWidgetExt for MyWidget {
+
+}*/
 
 enum Component {
     NonLeaf(Node),
-    Leaf(Rc<Widget>)
+    Leaf(Box<dyn MyWidgetExt>)
 }
 
 struct Node {
-    container: Option<Rc<Container>>,
+    widget: Option<MyWidget>,
     children: HashMap<String, Component>
 }
 
+type WidgetMap = HashMap<String, Widget>;
+
 impl Component {
-    fn hide_highest_widgets(&self/*, container: &Container*/) {
+    fn hide_highest_widgets(&self, wmap: &WidgetMap) {
         match self {
-            Component::Leaf(widget) => {
-                //container.remove(*widget);
-                widget.hide();
-            }
+            Component::Leaf(_) => { }
             Component::NonLeaf(node) => {
-                if let Some(ref my_container) = node.container {
-                    //container.remove(my_container.upcast_ref::<Widget>());
-                    my_container.hide();
-                }
-                else {
-                    node.children.iter().for_each(|(_, v)| {
-                        v.hide_highest_widgets();
-                    });
-                }
+                node.children.iter().for_each(|(name, child)| {
+                    match child {
+                        Component::NonLeaf(child_node) => {
+                            if child_node.widget.is_some() {
+                                wmap[name].hide();
+                            }
+                            else { 
+                                child.hide_highest_widgets(wmap);
+                            }
+                        }
+                        Component::Leaf(_) => {
+                            wmap[name].hide();
+                        }
+                    } 
+                });
             }
         }
     } 
+    fn add_or_show_widgets(&self, wmap: &WidgetMap) {
+
+
+    }
+}
+/*
 
     fn render_diff<C>(&self, comp_old: Option<&Component>, container: &Rc<C>)
         where C: ContainerExt + IsA<Widget>
@@ -169,86 +200,4 @@ fn create_tree<'a, T>(v: Vec<T>, state: AppPtr, container: Option<Rc<Container>>
         container,
         children
     })
-} 
-
-fn sign_in_page(state: AppPtr) -> Component {
-    let button = Rc::clone(&state.borrow().gui.widgets["sign_in_button"]);
-    button.downcast_ref::<gtk::Button>().unwrap().connect_clicked(move |_| {
-        println!("Clicked!");
-        sign_in(Rc::clone(&state));
-    });
-    Component::Leaf(button)
-}
-
-fn user_page(state: AppPtr) -> Component {
-    let label = Rc::clone(&state.borrow().gui.widgets["signed_in_label"]);
-    let button = Rc::clone(&state.borrow().gui.widgets["get_trans_button"]);
-    let state_c = Rc::clone(&state);
-    button.downcast_ref::<gtk::Button>().unwrap().connect_clicked(move |_| {
-        println!("Clicked!");
-        sign_in(Rc::clone(&state_c));
-    });
-    let v = vec![Component::Leaf(label), Component::Leaf(button)];
-    create_tree(v, state, None)
-}
-
-fn main_app(state: AppPtr) -> Component {
-    let mut v = Vec::new();
-    if state.borrow().data.signed_in {
-        v.push(sign_in_page as ComponentFn);
-    }
-    else {
-        v.push(user_page as ComponentFn);
-    }
-    create_tree(v, state, None)
-}
-
-fn create_widgets() -> HashMap<String, Rc<Widget>> {
-    let mut widgets = HashMap::new();
-    let button = gtk::Button::new_with_label("Sign in");
-    widgets.insert("sign_in_button".to_string(), make_widget!(button));
-    let label = gtk::Label::new_with_mnemonic(Some("You are now signed in!"));
-    widgets.insert("signed_in_label".to_string(), make_widget!(label));
-    let get_trans_button = gtk::Button::new_with_label("Get transactions!");
-    widgets.insert("get_trans_button".to_string(), make_widget!(get_trans_button));
-    widgets
-}
-
-impl GuiState {
-    fn new(app: &gtk::Application) -> GuiState {
-        let window = gtk::ApplicationWindow::new(app);
-        window.set_title("First GTK+ Program");
-        window.set_border_width(10);
-        window.set_position(gtk::WindowPosition::Center);
-        window.set_default_size(350, 70);
-        let widgets = create_widgets();
-        GuiState {
-            window: Rc::new(window),
-            widgets
-        }
-    }
-}
-
-pub fn build_ui(state: AppPtr) {
-    let app_tree = main_app(Rc::clone(&state));
-    app_tree.render_diff(state.borrow().ui_tree.as_ref(), &state.borrow().gui.window);
-    state.borrow_mut().ui_tree = Some(app_tree);
-}
-
-pub fn run_app() {
-    let application =
-        gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
-            .expect("Initialization failed...");
-    application.connect_activate(move |app| {
-        let app_state = AppState {
-            data: DataModel::new(),
-            async_request: Request::arc_none(),
-            ui_tree: None,
-            gui: GuiState::new(app)
-        };
-        let app_ptr = Rc::new(RefCell::new(app_state));
-        build_ui(app_ptr);
-    });
-
-    application.run(&args().collect::<Vec<_>>());
-}
+} */
