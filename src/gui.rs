@@ -4,7 +4,7 @@ extern crate gtk;
 extern crate hyper;
 use crate::datamodel;
 
-use datamodel::{DataPtr, DataModel, Request, sign_in};
+use datamodel::{DataPtr, DataModel, RequestStatus, sign_in};
 use gio::prelude::*;
 use gtk::{prelude::*, Widget, Container};
 use std::env::args;

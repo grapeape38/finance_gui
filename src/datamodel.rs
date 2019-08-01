@@ -12,45 +12,31 @@ use gio::prelude::*;
 use gtk::{prelude::*, timeout_add_seconds};
 use serde_json::{Value};
 use std::rc::Rc;
+use std::error::Error;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use plaid::{ClientHandle, AuthParams, get_access_token};
 
 #[derive(Debug, Clone)]
-enum RequestType {
+pub enum RequestType {
     None,
     SignIn,
     GetTransactions,
 }
 
 #[derive(Debug, Clone)]
-enum RequestStatus {
+pub enum RequestStatus {
     None,
     InProgress,
     Ok(Value),
     Err(String)
 }
 
-#[derive(Debug, Clone)]
-pub struct Request {
-    req_type: RequestType,
-    req_status: RequestStatus 
-}
-
-impl Request {
-    pub fn arc_none() -> Arc<Mutex<Request>> {
-        Arc::new(Mutex::new(Request { 
-            req_type: RequestType::None,
-            req_status: RequestStatus::None
-        }))
-    }
-}
-
 pub struct DataModel { 
     pub signed_in: bool,
     transactions: Option<Value>,
     auth_params: AuthParams,
-    request: Arc<Mutex<Request>>
+    req_status: Arc<Mutex<RequestStatus>>
 }
 
 impl DataModel {
@@ -59,7 +45,7 @@ impl DataModel {
             signed_in: false,
             auth_params: AuthParams::new().unwrap(),
             transactions: None,
-            request: Request::arc_none()
+            req_status: Arc::new(Mutex::new(RequestStatus::None)) 
         }
     }
 }
@@ -89,19 +75,20 @@ impl<T> Modify<T> for Arc<Mutex<T>> {
     }
 }
 
-fn make_call_async<F>(request: Arc<Mutex<Request>>, call: F)
-    where F: Future<Item=Value, Error=hyper::Error> + Send + 'static
+fn make_call_async<F>(req_status: Arc<Mutex<RequestStatus>>, call: F)
+    where F: Future<Item=Value, Error=String> + Send + 'static
 {
-    let req_err = Arc::clone(&request);
+    let req_err = Arc::clone(&req_status);
+    //let call_send = call.map_err(|e| e.to_string());
     rt::spawn(rt::lazy(move || {
         call.and_then(move |resp_json| {
-            request.modify(|st| {
-                st.req_status = RequestStatus::Ok(resp_json);
+            req_status.modify(|st| {
+                *st = RequestStatus::Ok(resp_json);
             }).unwrap();
             Ok(())
         }).map_err(move |e| {
             req_err.modify(|st| {
-                st.req_status = RequestStatus::Err(e.to_string());
+                *st = RequestStatus::Err(e);
             }).unwrap();
         })
     }));
@@ -122,18 +109,18 @@ fn handle_response_ok(state: AppPtr, req_type: RequestType, json: Value) {
     }
 }
 
-fn poll_response(state: AppPtr) -> Continue {
+pub fn poll_response(state: AppPtr, req_type: RequestType) -> Continue {
     let req_clone = state.borrow().async_request.modify_clone(|st| {
         st.clone()
     });
     if let Some(req_clone) = req_clone {
-        match req_clone.req_status {
+        match req_clone {
             RequestStatus::None | RequestStatus::InProgress => {
                 println!("Not finished!");
             }
             RequestStatus::Ok(json) => {
                 println!("Got response!");
-                handle_response_ok(state, req_clone.req_type, json);
+                handle_response_ok(state, req_type, json);
                 return Continue(false);
             }
             RequestStatus::Err(e) => {
@@ -147,11 +134,10 @@ fn poll_response(state: AppPtr) -> Continue {
 
 pub fn sign_in(state: AppPtr) {
     state.borrow_mut().async_request.modify(|req| {
-        req.req_type = RequestType::SignIn;
-        req.req_status = RequestStatus::InProgress;
+        *req = RequestStatus::InProgress;
     });
     make_call_async(Arc::clone(&state.borrow().async_request), get_access_token());
     timeout_add_seconds(1, move || {
-        poll_response(Rc::clone(&state))
+        poll_response(Rc::clone(&state), RequestType::SignIn)
     });
 }

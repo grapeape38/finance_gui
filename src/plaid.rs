@@ -1,6 +1,7 @@
+#![feature(result_map_or_else)]
+
 extern crate hyper;
 extern crate rand;
-
 use rand::{Rng};
 use hyper::{Client, Method, Body, Request};
 use hyper::client::{HttpConnector};
@@ -150,7 +151,7 @@ impl ClientHandle {
         })
     }
     
-    fn post_json(&self, json: &str, uri: &str) -> impl Future<Item=Value, Error=hyper::Error> {
+    fn post_json(&self, json: &str, uri: &str) -> impl Future<Item=Value, Error=String> {
         let uri: hyper::Uri = uri.parse().unwrap();
         let mut req = Request::new(Body::from(json.to_string()));
         *req.method_mut() = Method::POST;
@@ -159,13 +160,13 @@ impl ClientHandle {
         self.client.request(req).and_then(|res| {
                 println!("Response: {}", res.status());
                 res.into_body().concat2()
-            }).and_then(|body| {
-                let resp_json: Value = serde_json::from_slice(&body).expect("json parsing error");
+            }).map_err(|e| e.to_string()).and_then(|body| {
+                let resp_json: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
                 Ok(resp_json)
             })
     }
     
-    pub fn get_session_id(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
+    pub fn get_session_id(mut self) -> impl Future<Item=Self, Error=String> {
         let json = serde_json::to_string_pretty(&self.params).unwrap();
         println!("Getting session id, json: {}", json);
         let url = "https://sandbox.plaid.com/link/client/get";
@@ -176,7 +177,7 @@ impl ClientHandle {
     }
 
     
-    pub fn get_public_token(mut self) -> impl Future<Item=Self, Error=hyper::Error> {
+    pub fn get_public_token(mut self) -> impl Future<Item=Self, Error=String> {
         self.params.link_version = None;
         self.params.country_codes = None;
         self.params.display_language = Some("en");
@@ -194,7 +195,7 @@ impl ClientHandle {
     }
 
     
-    pub fn exchange_public_token(&self) -> impl Future<Item=Value, Error=hyper::Error> {
+    pub fn exchange_public_token(&self) -> impl Future<Item=Value, Error=String> {
         let url = "https://sandbox.plaid.com/item/public_token/exchange";
         let json = json!({
             "public_token": self.params.public_token.clone().unwrap(),
@@ -207,12 +208,12 @@ impl ClientHandle {
     }
 
     
-    fn api_call(&self, url: &str, json: Value) -> impl Future<Item=Value, Error=hyper::Error> {
+    fn api_call(&self, url: &str, json: Value) -> impl Future<Item=Value, Error=String> {
         let json_str = self.auth_params.add_json(&json); 
         self.post_json(&json_str, url)
     }
     
-    pub fn get_transactions(&self) -> impl Future<Item=Value, Error=hyper::Error> {
+    pub fn get_transactions(&self) -> impl Future<Item=Value, Error=String> {
         let url = "https://sandbox.plaid.com/transactions/get";
         let json = json!({
             "start_date": "2019-07-01",
@@ -222,19 +223,18 @@ impl ClientHandle {
         self.api_call(url, json)
     }
 
-    pub fn get_balance(&self) -> impl Future<Item=Value, Error=hyper::Error> {
+    pub fn get_balance(&self) -> impl Future<Item=Value, Error=String> {
         let url = "https://sandbox.plaid.com/accounts/balance/get";
         self.api_call(url, Map::new().into())
     }
 }
 
-
-pub fn get_access_token() -> impl Future<Item=Value, Error=hyper::Error> {
+pub fn get_access_token() -> impl Future<Item=Value, Error=String> {
     let ch = ClientHandle::new().unwrap();
     ch.get_session_id()
         .and_then(|ch| {
         ch.get_public_token()
     }).and_then(|ch| {
         ch.exchange_public_token()
-    })
+    }).map_err(|e| e.to_string())
 }
