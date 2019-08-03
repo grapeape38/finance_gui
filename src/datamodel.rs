@@ -9,27 +9,55 @@ use hyper::rt::{self, Future, Stream};
 
 use gui::{AppPtr, build_ui};
 use gio::prelude::*;
-use gtk::{prelude::*, timeout_add_seconds};
+use gtk::prelude::*;
 use serde_json::{Value};
 use std::rc::Rc;
-use std::error::Error;
-use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
-use plaid::{ClientHandle, AuthParams, get_access_token};
+use plaid::*;
 
 #[derive(Debug, Clone)]
 pub enum RequestType {
-    None,
+    NoReq,
     SignIn,
     GetTransactions,
 }
 
 #[derive(Debug, Clone)]
 pub enum RequestStatus {
-    None,
+    NoReq,
     InProgress,
     Ok(Value),
     Err(String)
+}
+
+pub struct AsyncCallback<F> 
+where F: Future<Item=Value, Error=String> + Send + 'static
+{
+    pub req_type: RequestType,
+    pub fut: Box<Fn(&DataModel) -> F>
+}
+
+impl<F> AsyncCallback<F> 
+    where F: Future<Item=Value, Error=String> + Send + 'static
+{
+    pub fn make_call_async(&self, app: &AppPtr) {
+        let req_err = Arc::clone(&app.borrow().async_request);
+        let app_2 = Rc::clone(app);
+        let call = (self.fut)(&app_2.borrow().data);
+        let req_status = Arc::clone(&app_2.borrow().async_request);
+        rt::spawn(rt::lazy(move || {
+            call.and_then(move |resp_json| {
+                req_status.modify(|st| {
+                    *st = RequestStatus::Ok(resp_json);
+                }).unwrap();
+                Ok(())
+            }).map_err(move |e| {
+                req_err.modify(|st| {
+                    *st = RequestStatus::Err(e);
+                }).unwrap();
+            })
+        }));
+    }
 }
 
 pub struct DataModel { 
@@ -45,17 +73,10 @@ impl DataModel {
             signed_in: false,
             auth_params: AuthParams::new().unwrap(),
             transactions: None,
-            req_status: Arc::new(Mutex::new(RequestStatus::None)) 
+            req_status: Arc::new(Mutex::new(RequestStatus::NoReq)) 
         }
     }
 }
-
-pub type DataPtr = Rc<RefCell<DataModel>>;
-
-pub fn create_model() -> DataPtr {
-    Rc::new(RefCell::new(DataModel::new()))
-}
-
 
 trait Modify<T> {
     fn modify<F>(&self, closure: F) -> Option<()> where F: FnOnce(&mut T);
@@ -75,47 +96,34 @@ impl<T> Modify<T> for Arc<Mutex<T>> {
     }
 }
 
-fn make_call_async<F>(req_status: Arc<Mutex<RequestStatus>>, call: F)
-    where F: Future<Item=Value, Error=String> + Send + 'static
-{
-    let req_err = Arc::clone(&req_status);
-    //let call_send = call.map_err(|e| e.to_string());
-    rt::spawn(rt::lazy(move || {
-        call.and_then(move |resp_json| {
-            req_status.modify(|st| {
-                *st = RequestStatus::Ok(resp_json);
-            }).unwrap();
-            Ok(())
-        }).map_err(move |e| {
-            req_err.modify(|st| {
-                *st = RequestStatus::Err(e);
-            }).unwrap();
-        })
-    }));
-}
-
-fn handle_response_ok(state: AppPtr, req_type: RequestType, json: Value) {
-    let mut state = state.borrow_mut();
-    match req_type {
-        RequestType::None=> { },
-        RequestType::SignIn => {
-            state.data.signed_in = true;
-            state.data.auth_params.access_token = Some(json["access_token"].as_str().expect("failed to get public token").to_string());
-            state.data.auth_params.item_id = Some(json["item_id"].as_str().expect("failed to get item id").to_string());
-        },
-        RequestType::GetTransactions => {
-            state.data.transactions = Some(json);
+fn handle_response_ok(state: AppPtr, req_type: &RequestType, json: Value) {
+    let mut state_changed = true;
+    {
+        let mut state = state.borrow_mut();
+        match req_type {
+            RequestType::NoReq => { state_changed = false; },
+            RequestType::SignIn => {
+                state.data.signed_in = true;
+                state.data.auth_params.access_token = Some(json["access_token"].as_str().expect("failed to get public token").to_string());
+                state.data.auth_params.item_id = Some(json["item_id"].as_str().expect("failed to get item id").to_string());
+            },
+            RequestType::GetTransactions => {
+                state.data.transactions = Some(json);
+            }
         }
+    }
+    if state_changed {
+        build_ui(state);
     }
 }
 
-pub fn poll_response(state: AppPtr, req_type: RequestType) -> Continue {
+pub fn poll_response(state: AppPtr, req_type: &RequestType) -> Continue {
     let req_clone = state.borrow().async_request.modify_clone(|st| {
         st.clone()
     });
     if let Some(req_clone) = req_clone {
         match req_clone {
-            RequestStatus::None | RequestStatus::InProgress => {
+            RequestStatus::NoReq | RequestStatus::InProgress => {
                 println!("Not finished!");
             }
             RequestStatus::Ok(json) => {
@@ -132,12 +140,22 @@ pub fn poll_response(state: AppPtr, req_type: RequestType) -> Continue {
     return Continue(true);
 }
 
-pub fn sign_in(state: AppPtr) {
-    state.borrow_mut().async_request.modify(|req| {
-        *req = RequestStatus::InProgress;
-    });
-    make_call_async(Arc::clone(&state.borrow().async_request), get_access_token());
-    timeout_add_seconds(1, move || {
-        poll_response(Rc::clone(&state), RequestType::SignIn)
-    });
+pub fn sign_in_cb() -> Rc<AsyncCallback<impl Future<Item=Value, Error=String>>>
+{
+    Rc::new(AsyncCallback {
+        req_type: RequestType::SignIn,
+        fut: Box::new(|_| { get_access_token() })
+    })
+}
+
+pub fn get_transactions_cb() -> Rc<AsyncCallback<impl Future<Item=Value, Error=String>>> {
+    Rc::new(AsyncCallback {
+        req_type: RequestType::GetTransactions,
+        fut: Box::new(|data| {
+            let auth_params = data.auth_params.clone();
+            let mut ch = ClientHandle::new().unwrap();
+            ch.auth_params = auth_params;
+            ch.get_transactions()
+        })
+    })
 }
