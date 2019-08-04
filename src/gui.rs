@@ -9,7 +9,7 @@ use datamodel::*;
 use component::*;
 
 use gio::prelude::*;
-use gtk::{prelude::*, Widget, Button, Label, Container};
+use gtk::{prelude::*, Widget, Window, Button, Label, Container};
 use std::env::args;
 use component::EWidget::*;
 use std::rc::Rc;
@@ -45,22 +45,26 @@ pub struct AppState {
     pub data: RefCell<DataModel>,
     pub async_request: Arc<Mutex<RequestStatus>>,
     ui_tree: RefCell<Option<Component>>,
-    pub gtk_app: Rc<gtk::Application>,
     pub widgets: RefCell<WidgetMap>
 }
 
 pub type AppPtr = Rc<AppState>;
 
 impl AppState {
-    fn new_ptr(gtk_app: Rc<gtk::Application>) -> AppPtr {
-        
+    fn new_ptr(app: &gtk::Application) -> AppPtr {
+        let window = gtk::ApplicationWindow::new(app);
+        window.set_title("First GTK+ Program");
+        window.set_border_width(10);
+        window.set_position(gtk::WindowPosition::Center);
+        window.set_default_size(350, 70);
 
+        let mut widgets = create_widgets();
+        widgets.get_mut(&MainWindow).unwrap().set(window.upcast::<Widget>());
         let app_state = AppState {
             data: RefCell::new(DataModel::new()),
             async_request: Arc::new(Mutex::new(RequestStatus::NoReq)),
             ui_tree: RefCell::new(None),
-            gtk_app,
-            widgets: RefCell::new(HashMap::new())
+            widgets: RefCell::new(widgets)
         };
         Rc::new(app_state)
     }
@@ -70,7 +74,8 @@ fn create_widgets() -> HashMap<EWidget, MyWidgetInfo> {
     c_map!(
         SignInButton => Button,
         SignedInLabel => Label,
-        GetTransButton => Button
+        GetTransButton => Button,
+        MainWindow => Window
     )
 }
 
@@ -105,7 +110,7 @@ pub fn build_ui(state: AppPtr) {
     let app_tree = main_app(Rc::clone(&state));
     app_tree.render_diff(
         state.ui_tree.borrow().as_ref(),
-        state.window.upcast_ref::<Container>(),
+        &MainWindow,
         &mut state.widgets.borrow_mut(),
         &state);
     *state.ui_tree.borrow_mut() = Some(app_tree);
@@ -115,9 +120,8 @@ pub fn run_app() {
     let application =
         gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
             .expect("Initialization failed...");
-    let gtk_app = Rc::new(application);
-    gtk_app.connect_activate(move |_| {
-        let app_state = AppState::new_ptr(Rc::clone(&gtk_app));
+    application.connect_activate(move |app| {
+        let app_state = AppState::new_ptr(app);
         build_ui(app_state);
     });
 

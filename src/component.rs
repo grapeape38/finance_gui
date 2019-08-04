@@ -5,14 +5,14 @@ extern crate hyper;
 use crate::gui::{AppPtr};
 use crate::datamodel::{AsyncCallback, poll_response};
 
-use gtk::{prelude::*, Widget, Container, Button, ApplicationWindow, Label};
+use gtk::{prelude::*, Widget, Container, Button, Window, Label};
 use std::iter::FromIterator;
 use std::rc::Rc;
 use hyper::rt::Future;
 use std::marker::PhantomData;
 use serde_json::Value;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -67,6 +67,9 @@ impl MyWidgetInfo {
     fn get(&self) -> Option<&Widget> {
         self.widget.as_ref()
     }
+    pub fn set(&mut self, w: Widget) {
+        self.widget = Some(w);
+    }
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -75,6 +78,7 @@ pub enum EWidget {
     SignInLabel,
     GetTransButton,
     SignedInLabel, 
+    MainWindow
 }
 
 
@@ -110,14 +114,13 @@ impl WidgetFactory for Factory<Label> {
     }
 }
 
-impl WidgetFactory for Factory<ApplicationWindow> {
-    fn make(&self, info: &WidgetInfo, app: &AppPtr) -> Widget {
-        /*let window = gtk::ApplicationWindow::new(app);
-        window.set_title("First GTK+ Program");
+impl WidgetFactory for Factory<Window> {
+    fn make(&self, _: &WidgetInfo, _: &AppPtr) -> Widget {
+        /*window.set_title("First GTK+ Program");
         window.set_border_width(10);
         window.set_position(gtk::WindowPosition::Center);
         window.set_default_size(350, 70);*/
-        gtk::Label::new(info.attributes.get("mnemonic").map(|s| &**s)).upcast::<Widget>()
+        Window::new(gtk::WindowType::Toplevel).upcast::<Widget>()
     }
 }
 
@@ -257,11 +260,13 @@ impl Component {
                     match child {
                         Component::NonLeaf(child_node) => {
                             if let Some(ref widget_info) = child_node.widget {
-                                let gtk_widget = wmap.get_mut(&widget_info.id).unwrap().get_or_make(widget_info, app); 
-                                let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
-                                add_parent_maybe(&gtk_widget, new_cont);
+                                {
+                                    let gtk_widget = wmap.get_mut(&widget_info.id).unwrap().get_or_make(widget_info, app); 
+                                    let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
+                                    add_parent_maybe(&gtk_widget, new_cont);
+                                }
                                 child.add_or_show_widgets(&widget_info.id, wmap, app);
-                                gtk_widget.show();
+                                wmap.get(&widget_info.id).unwrap().get().unwrap().show();
                             }
                             else { 
                                 child.add_or_show_widgets(container_id, wmap, app);
@@ -277,7 +282,7 @@ impl Component {
                 });
             }
         }
-        let cont = wmap[container_id].widget.unwrap().downcast_ref::<Container>().unwrap();
+        let cont = wmap[container_id].get().unwrap().downcast_ref::<Container>().unwrap();
         if !cont.is_visible() {
             cont.show();
         }
@@ -294,7 +299,7 @@ impl Component {
                             self.add_or_show_widgets(container_id, wmap, app);
                         }
                         Component::NonLeaf(my_node) => { //case both non leafs
-                            let new_cont = my_node.widget.map(|w| &w.id).unwrap_or(container_id);
+                            let new_cont = my_node.widget.as_ref().map(|w| &w.id).unwrap_or(container_id);
                             other_node.children.iter().for_each(|(id, v)| {
                                 if !my_node.children.contains_key(id) {
                                     v.hide_highest_widgets(wmap);
