@@ -5,7 +5,7 @@ extern crate hyper;
 use crate::gui::{AppPtr};
 use crate::datamodel::{AsyncCallback, poll_response};
 
-use gtk::{prelude::*, Widget, Container, Button, Label};
+use gtk::{prelude::*, Widget, Container, Button, ApplicationWindow, Label};
 use std::iter::FromIterator;
 use std::rc::Rc;
 use hyper::rt::Future;
@@ -55,12 +55,12 @@ impl MyWidgetInfo {
             factory
         }
     }
-    fn get_or_make(mut self, info: &WidgetInfo, app: &AppPtr) -> Widget {
+    fn get_or_make(&mut self, info: &WidgetInfo, app: &AppPtr) -> &Widget {
         match self.widget {
-            Some(w) => w,
+            Some(ref w) => w,
             None => {
                 self.widget = Some(self.factory.make(info, app));
-                self.widget.unwrap()
+                self.widget.as_ref().unwrap()
             }
         }
     }
@@ -106,6 +106,17 @@ impl WidgetFactory for Factory<Button> {
 
 impl WidgetFactory for Factory<Label> {
     fn make(&self, info: &WidgetInfo, _: &AppPtr) -> Widget {
+        gtk::Label::new(info.attributes.get("mnemonic").map(|s| &**s)).upcast::<Widget>()
+    }
+}
+
+impl WidgetFactory for Factory<ApplicationWindow> {
+    fn make(&self, info: &WidgetInfo, app: &AppPtr) -> Widget {
+        /*let window = gtk::ApplicationWindow::new(app);
+        window.set_title("First GTK+ Program");
+        window.set_border_width(10);
+        window.set_position(gtk::WindowPosition::Center);
+        window.set_default_size(350, 70);*/
         gtk::Label::new(info.attributes.get("mnemonic").map(|s| &**s)).upcast::<Widget>()
     }
 }
@@ -238,7 +249,7 @@ impl Component {
         }
     } 
 
-    fn add_or_show_widgets(&self, container: &Container, wmap: &mut WidgetMap, app: &AppPtr) {
+    fn add_or_show_widgets(&self, container_id: &EWidget, wmap: &mut WidgetMap, app: &AppPtr) {
         match self {
             Component::Leaf(_) => { }
             Component::NonLeaf(node) => {
@@ -246,33 +257,33 @@ impl Component {
                     match child {
                         Component::NonLeaf(child_node) => {
                             if let Some(ref widget_info) = child_node.widget {
-                                let mut gtk_widget_info = wmap.remove(&widget_info.id).unwrap(); 
-                                let gtk_widget = gtk_widget_info.get_or_make(widget_info, app); 
-                                add_parent_maybe(&gtk_widget, container);
+                                let gtk_widget = wmap.get_mut(&widget_info.id).unwrap().get_or_make(widget_info, app); 
                                 let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
-                                child.add_or_show_widgets(new_cont, wmap, app);
+                                add_parent_maybe(&gtk_widget, new_cont);
+                                child.add_or_show_widgets(&widget_info.id, wmap, app);
                                 gtk_widget.show();
-                                gtk_widget_info.widget = Some(gtk_widget);
-                                wmap.insert(widget_info.id, gtk_widget_info);
                             }
                             else { 
-                                child.add_or_show_widgets(container, wmap, app);
+                                child.add_or_show_widgets(container_id, wmap, app);
                             }
                         }
                         Component::Leaf(widget_info) => {
-                            let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
-                            add_parent_maybe(&gtk_widget, container);
+                            let gtk_widget = wmap.get_mut(&widget_info.id).unwrap().get_or_make(widget_info, app); 
+                            let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
+                            add_parent_maybe(&gtk_widget, new_cont);
                             gtk_widget.show();
                         }
                     } 
                 });
             }
         }
-        if !container.is_visible() {
-            container.show();
+        let cont = wmap[container_id].widget.unwrap().downcast_ref::<Container>().unwrap();
+        if !cont.is_visible() {
+            cont.show();
         }
     }
-    pub fn render_diff(&self, comp_old: Option<&Component>, container: &Container, wmap: &mut WidgetMap, app: &AppPtr)
+
+    pub fn render_diff(&self, comp_old: Option<&Component>, container_id: &EWidget, wmap: &mut WidgetMap, app: &AppPtr)
     {
         if let Some(comp_old) = comp_old {
             match comp_old {
@@ -280,14 +291,10 @@ impl Component {
                     match self {
                         Component::Leaf(_) => { //other is non leaf, you are leaf, remove all other's children
                             comp_old.hide_highest_widgets(wmap);
-                            self.add_or_show_widgets(container, wmap, app);
+                            self.add_or_show_widgets(container_id, wmap, app);
                         }
                         Component::NonLeaf(my_node) => { //case both non leafs
-                            let mut new_cont = container;
-                            if let Some(ref widget_info) = my_node.widget {
-                                let gtk_widget = wmap[&widget_info.id].get_or_make(&widget_info, app);
-                                new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
-                            }
+                            let new_cont = my_node.widget.map(|w| &w.id).unwrap_or(container_id);
                             other_node.children.iter().for_each(|(id, v)| {
                                 if !my_node.children.contains_key(id) {
                                     v.hide_highest_widgets(wmap);
@@ -299,7 +306,7 @@ impl Component {
                             });
                             my_node.children.iter().for_each(|(id, v)| {
                                 if !other_node.children.contains_key(id) { //add all new nodes
-                                    v.add_or_show_widgets(container, wmap, app);
+                                    v.add_or_show_widgets(container_id, wmap, app);
                                 }
                             });
                         }
@@ -309,7 +316,7 @@ impl Component {
                     match self {
                         Component::NonLeaf(_) => { //you are non leaf, other is leaf, remove all other's children
                             comp_old.hide_highest_widgets(wmap);
-                            self.add_or_show_widgets(container, wmap, app);
+                            self.add_or_show_widgets(container_id, wmap, app);
                         }
                         _ => {} //will never compare two leaves
                     }
@@ -317,7 +324,7 @@ impl Component {
             }
         }
         else { //empty previous state
-            self.add_or_show_widgets(container, wmap, app);
+            self.add_or_show_widgets(container_id, wmap, app);
         }
     }
 }

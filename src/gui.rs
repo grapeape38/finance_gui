@@ -45,25 +45,21 @@ pub struct AppState {
     pub data: RefCell<DataModel>,
     pub async_request: Arc<Mutex<RequestStatus>>,
     ui_tree: RefCell<Option<Component>>,
-    window: gtk::ApplicationWindow,
+    pub gtk_app: Rc<gtk::Application>,
     pub widgets: RefCell<WidgetMap>
 }
 
 pub type AppPtr = Rc<AppState>;
 
 impl AppState {
-    fn new_ptr(app: &gtk::Application) -> AppPtr {
-        let window = gtk::ApplicationWindow::new(app);
-        window.set_title("First GTK+ Program");
-        window.set_border_width(10);
-        window.set_position(gtk::WindowPosition::Center);
-        window.set_default_size(350, 70);
+    fn new_ptr(gtk_app: Rc<gtk::Application>) -> AppPtr {
+        
 
         let app_state = AppState {
             data: RefCell::new(DataModel::new()),
             async_request: Arc::new(Mutex::new(RequestStatus::NoReq)),
             ui_tree: RefCell::new(None),
-            window,
+            gtk_app,
             widgets: RefCell::new(HashMap::new())
         };
         Rc::new(app_state)
@@ -119,8 +115,9 @@ pub fn run_app() {
     let application =
         gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
             .expect("Initialization failed...");
-    application.connect_activate(move |app| {
-        let app_state = AppState::new_ptr(app);
+    let gtk_app = Rc::new(application);
+    gtk_app.connect_activate(move |_| {
+        let app_state = AppState::new_ptr(Rc::clone(&gtk_app));
         build_ui(app_state);
     });
 
