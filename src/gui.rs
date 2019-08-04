@@ -11,6 +11,7 @@ use component::*;
 use gio::prelude::*;
 use gtk::{prelude::*, Widget, Button, Label, Container};
 use std::env::args;
+use component::EWidget::*;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
@@ -28,69 +29,90 @@ macro_rules! map(
      };
 );
 
+macro_rules! c_map(
+    { $($key:expr => $value:ty),+ } => {
+        {
+            let mut m = HashMap::new();
+            $(
+                m.insert($key, MyWidgetInfo::new(Box::new(Factory::<$value>::new())));
+            )+
+            m
+        }
+     };
+);
+
 pub struct AppState {
-    pub data: DataModel,
+    pub data: RefCell<DataModel>,
     pub async_request: Arc<Mutex<RequestStatus>>,
-    ui_tree: Option<Component>,
-    gui: GuiState
+    ui_tree: RefCell<Option<Component>>,
+    window: gtk::ApplicationWindow,
+    pub widgets: RefCell<WidgetMap>
 }
 
-pub type AppPtr = Rc<RefCell<AppState>>;
+pub type AppPtr = Rc<AppState>;
 
-struct GuiState {
-    window: Rc<gtk::ApplicationWindow>,
-    widgets: WidgetMap,
-}
-
-fn sign_in_page(_: AppPtr) -> Component {
-    Component::new_leaf(Box::new(Factory::<Button>::new()))
-        .with_attributes(map!("label" => "Sign in!"))
-        .with_callback("clicked", sign_in_cb())
-}
-
-fn user_page(state: AppPtr) -> Component {
-    let label = Component::new_leaf(Box::new(Factory::<Label>::new()))
-        .with_attributes(map!("text" => "You are signed in!"));
-    let button = Component::new_leaf(Box::new(Factory::<Button>::new()))
-        .with_attributes(map!("label" => "Get transactions"))
-        .with_callback("clicked", get_transactions_cb());
-    let v = vec![label, button];
-    Component::new_node(v, state, None)
-}
-
-fn main_app(state: AppPtr) -> Component {
-    let mut v = Vec::new();
-    if state.borrow().data.signed_in {
-        v.push(sign_in_page as ComponentFn);
-    }
-    else {
-        v.push(user_page as ComponentFn);
-    }
-    Component::new_node(v, state, None)
-}
-
-impl GuiState {
-    fn new(app: &gtk::Application) -> GuiState {
+impl AppState {
+    fn new_ptr(app: &gtk::Application) -> AppPtr {
         let window = gtk::ApplicationWindow::new(app);
         window.set_title("First GTK+ Program");
         window.set_border_width(10);
         window.set_position(gtk::WindowPosition::Center);
         window.set_default_size(350, 70);
-        GuiState {
-            window: Rc::new(window),
-            widgets: HashMap::new()
-        }
+
+        let app_state = AppState {
+            data: RefCell::new(DataModel::new()),
+            async_request: Arc::new(Mutex::new(RequestStatus::NoReq)),
+            ui_tree: RefCell::new(None),
+            window,
+            widgets: RefCell::new(HashMap::new())
+        };
+        Rc::new(app_state)
     }
+}
+
+fn create_widgets() -> HashMap<EWidget, MyWidgetInfo> {
+    c_map!(
+        SignInButton => Button,
+        SignedInLabel => Label,
+        GetTransButton => Button
+    )
+}
+
+fn sign_in_page(_: AppPtr) -> Component {
+    Component::new_leaf(SignInButton)
+        .with_attributes(map!("label" => "Sign in!"))
+        .with_callback("clicked", sign_in_cb())
+}
+
+fn user_page(state: AppPtr) -> Component {
+    let label = Component::new_leaf(SignedInLabel)
+        .with_attributes(map!("text" => "You are signed in!"));
+    let button = Component::new_leaf(GetTransButton)
+        .with_attributes(map!("label" => "Get transactions"))
+        .with_callback("clicked", get_transactions_cb());
+    let v = vec![label, button];
+    Component::new_node(v, state, None, "user_page")
+}
+
+fn main_app(state: AppPtr) -> Component {
+    let mut v = Vec::new();
+    if !state.data.borrow().signed_in {
+        v.push(sign_in_page as ComponentFn);
+    }
+    else {
+        v.push(user_page as ComponentFn);
+    }
+    Component::new_node(v, state, None, "main_app")
 }
 
 pub fn build_ui(state: AppPtr) {
     let app_tree = main_app(Rc::clone(&state));
     app_tree.render_diff(
-        state.borrow().ui_tree.as_ref(), 
-        state.borrow().gui.window.upcast_ref::<Container>(),
-        &mut state.borrow_mut().gui.widgets,
+        state.ui_tree.borrow().as_ref(),
+        state.window.upcast_ref::<Container>(),
+        &mut state.widgets.borrow_mut(),
         &state);
-    state.borrow_mut().ui_tree = Some(app_tree);
+    *state.ui_tree.borrow_mut() = Some(app_tree);
 }
 
 pub fn run_app() {
@@ -98,14 +120,8 @@ pub fn run_app() {
         gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
             .expect("Initialization failed...");
     application.connect_activate(move |app| {
-        let app_state = AppState {
-            data: DataModel::new(),
-            async_request: Arc::new(Mutex::new(RequestStatus::NoReq)),
-            ui_tree: None,
-            gui: GuiState::new(app)
-        };
-        let app_ptr = Rc::new(RefCell::new(app_state));
-        build_ui(app_ptr);
+        let app_state = AppState::new_ptr(app);
+        build_ui(app_state);
     });
 
     application.run(&args().collect::<Vec<_>>());

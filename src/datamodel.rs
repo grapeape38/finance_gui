@@ -41,10 +41,10 @@ impl<F> AsyncCallback<F>
     where F: Future<Item=Value, Error=String> + Send + 'static
 {
     pub fn make_call_async(&self, app: &AppPtr) {
-        let req_err = Arc::clone(&app.borrow().async_request);
         let app_2 = Rc::clone(app);
-        let call = (self.fut)(&app_2.borrow().data);
-        let req_status = Arc::clone(&app_2.borrow().async_request);
+        let call = (self.fut)(&app_2.data.borrow());
+        let req_status = Arc::clone(&app_2.async_request);
+        let req_err = Arc::clone(&req_status);
         rt::spawn(rt::lazy(move || {
             call.and_then(move |resp_json| {
                 req_status.modify(|st| {
@@ -99,16 +99,16 @@ impl<T> Modify<T> for Arc<Mutex<T>> {
 fn handle_response_ok(state: AppPtr, req_type: &RequestType, json: Value) {
     let mut state_changed = true;
     {
-        let mut state = state.borrow_mut();
+        let mut data = state.data.borrow_mut();
         match req_type {
             RequestType::NoReq => { state_changed = false; },
             RequestType::SignIn => {
-                state.data.signed_in = true;
-                state.data.auth_params.access_token = Some(json["access_token"].as_str().expect("failed to get public token").to_string());
-                state.data.auth_params.item_id = Some(json["item_id"].as_str().expect("failed to get item id").to_string());
+                data.signed_in = true;
+                data.auth_params.access_token = Some(json["access_token"].as_str().expect("failed to get public token").to_string());
+                data.auth_params.item_id = Some(json["item_id"].as_str().expect("failed to get item id").to_string());
             },
             RequestType::GetTransactions => {
-                state.data.transactions = Some(json);
+                data.transactions = Some(json);
             }
         }
     }
@@ -118,7 +118,7 @@ fn handle_response_ok(state: AppPtr, req_type: &RequestType, json: Value) {
 }
 
 pub fn poll_response(state: AppPtr, req_type: &RequestType) -> Continue {
-    let req_clone = state.borrow().async_request.modify_clone(|st| {
+    let req_clone = state.async_request.modify_clone(|st| {
         st.clone()
     });
     if let Some(req_clone) = req_clone {

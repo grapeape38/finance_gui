@@ -12,7 +12,9 @@ use hyper::rt::Future;
 use std::marker::PhantomData;
 use serde_json::Value;
 
-use std::collections::{HashMap};
+use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 pub trait CallbackT {
     fn do_cb(&self, app: &AppPtr, widget: &Widget);
@@ -40,6 +42,42 @@ fn call<T: gtk::Cast + gtk::IsA<Widget>>(cb: &Rc<CallbackT>, app: &AppPtr) -> Bo
         cb_2.do_cb(&app_2, widget);
     })
 }
+
+pub struct MyWidgetInfo {
+    widget: Option<Widget>,
+    factory: Box<dyn WidgetFactory> 
+}
+
+impl MyWidgetInfo {
+    pub fn new(factory: Box<dyn WidgetFactory>) -> MyWidgetInfo {
+        MyWidgetInfo {
+            widget: None,
+            factory
+        }
+    }
+    fn get_or_make(mut self, info: &WidgetInfo, app: &AppPtr) -> Widget {
+        match self.widget {
+            Some(w) => w,
+            None => {
+                self.widget = Some(self.factory.make(info, app));
+                self.widget.unwrap()
+            }
+        }
+    }
+    fn get(&self) -> Option<&Widget> {
+        self.widget.as_ref()
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub enum EWidget {
+    SignInButton,
+    SignInLabel,
+    GetTransButton,
+    SignedInLabel, 
+}
+
+
 
 pub trait WidgetFactory {
     fn make(&self, info: &WidgetInfo, app: &AppPtr) -> Widget;
@@ -75,7 +113,7 @@ impl WidgetFactory for Factory<Label> {
 pub struct WidgetInfo {
     attributes: HashMap<&'static str, &'static str>,
     callbacks: HashMap<&'static str, Rc<CallbackT>>,
-    factory: Box<dyn WidgetFactory> 
+    id: EWidget
 }
 
 impl WidgetInfo {
@@ -87,9 +125,6 @@ impl WidgetInfo {
         self.callbacks.insert(cb_type, cb);
         self
     }
-    fn make_widget(&self, app: &AppPtr) -> Widget {
-        self.factory.make(self, app)
-    }
 }
 
 pub enum Component {
@@ -99,17 +134,11 @@ pub enum Component {
 
 pub struct Node {
     widget: Option<WidgetInfo>,
-    children: HashMap<&'static str, Component>
+    id: u64,
+    children: HashMap<u64, Component>
 }
 
-impl Node {
-    fn with_child(mut self, child: (&'static str, Component)) -> Self {
-        self.children.insert(child.0, child.1);
-        self
-    }
-}
-
-pub type WidgetMap = HashMap<&'static str, Widget>;
+pub type WidgetMap = HashMap<EWidget, MyWidgetInfo>;
 
 fn add_parent_maybe(widget: &Widget, container: &Container) {
     if container.upcast_ref::<Widget>() != widget.get_parent().as_ref().unwrap_or(widget) {
@@ -118,22 +147,30 @@ fn add_parent_maybe(widget: &Widget, container: &Container) {
 }
 
 impl Component {
-    pub fn new_leaf(factory: Box<WidgetFactory>) -> Component {
+    pub fn new_leaf(id: EWidget) -> Component {
         Component::Leaf(WidgetInfo {
             attributes: HashMap::new(),
             callbacks: HashMap::new(),
-            factory 
+            id
         })
     }
-    pub fn new_node<T>(v: Vec<T>, state: AppPtr, container: Option<WidgetInfo>) -> Component
+    pub fn new_node<T>(v: Vec<T>, state: AppPtr, container: Option<WidgetInfo>, id: &'static str) -> Component
             where T: ToComponent
     {
         let children = HashMap::from_iter(
-            v.into_iter().map(|f| 
-                (stringify!(f), f.to_component(Rc::clone(&state)))
-            ));
+            v.into_iter().map(|f| {
+                let comp = f.to_component(Rc::clone(&state));
+                match comp {
+                    Component::Leaf(ref widget_info) => (widget_info.id.clone() as u64, comp),
+                    Component::NonLeaf(ref node) => (node.id, comp)
+                }
+            })
+        );
+        let mut s = DefaultHasher::new();
+        id.hash(&mut s);
         Component::NonLeaf(Node {
             widget: container,
+            id: s.finish(),
             children
         })
     }
@@ -147,6 +184,7 @@ impl Component {
                 if let Some(widget_info) = node.widget {
                     Component::NonLeaf(Node {
                         widget: Some(widget_info.with_attributes(attributes)),
+                        id: node.id,
                         children: node.children
                     })
                 }
@@ -166,6 +204,7 @@ impl Component {
                 if let Some(widget_info) = node.widget {
                     Component::NonLeaf(Node {
                         widget: Some(widget_info.with_callback(cb_type, callback)),
+                        id: node.id,
                         children: node.children
                     })
                 }
@@ -180,22 +219,18 @@ impl Component {
         match self {
             Component::Leaf(_) => { }
             Component::NonLeaf(node) => {
-                node.children.iter().for_each(|(name, child)| {
+                node.children.iter().for_each(|(_, child)| {
                     match child {
                         Component::NonLeaf(child_node) => {
-                            if child_node.widget.is_some() {
-                                if let Some(ref child_widget) = wmap.get(name) {
-                                    child_widget.hide();
-                                }
+                            if let Some(ref widget_info) = child_node.widget {
+                                wmap[&widget_info.id].get().unwrap().hide();
                             }
                             else { 
                                 child.hide_highest_widgets(wmap);
                             }
                         }
-                        Component::Leaf(_) => {
-                            if let Some(ref child_widget) = wmap.get(name) {
-                                child_widget.hide();
-                            }
+                        Component::Leaf(widget_info) => {
+                            wmap[&widget_info.id].get().unwrap().hide();
                         }
                     } 
                 });
@@ -207,33 +242,34 @@ impl Component {
         match self {
             Component::Leaf(_) => { }
             Component::NonLeaf(node) => {
-                node.children.iter().for_each(|(name, child)| {
+                node.children.iter().for_each(|(_, child)| {
                     match child {
                         Component::NonLeaf(child_node) => {
-                            if let Some(ref child_widget) = child_node.widget {
-                                let gtk_widget = wmap.remove(name).unwrap_or(child_widget.make_widget(app));
+                            if let Some(ref widget_info) = child_node.widget {
+                                let mut gtk_widget_info = wmap.remove(&widget_info.id).unwrap(); 
+                                let gtk_widget = gtk_widget_info.get_or_make(widget_info, app); 
                                 add_parent_maybe(&gtk_widget, container);
                                 let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
                                 child.add_or_show_widgets(new_cont, wmap, app);
                                 gtk_widget.show();
-                                wmap.insert(name.clone(), gtk_widget);
+                                gtk_widget_info.widget = Some(gtk_widget);
+                                wmap.insert(widget_info.id, gtk_widget_info);
                             }
                             else { 
                                 child.add_or_show_widgets(container, wmap, app);
                             }
                         }
-                        Component::Leaf(child_widget) => {
-                            if let Some(ref gtk_widget) = wmap.get(name) {
-                                add_parent_maybe(&gtk_widget, container);
-                                gtk_widget.show();
-                            }
-                            else {
-                                wmap.insert(name.clone(), child_widget.make_widget(app));
-                            }
+                        Component::Leaf(widget_info) => {
+                            let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
+                            add_parent_maybe(&gtk_widget, container);
+                            gtk_widget.show();
                         }
                     } 
                 });
             }
+        }
+        if !container.is_visible() {
+            container.show();
         }
     }
     pub fn render_diff(&self, comp_old: Option<&Component>, container: &Container, wmap: &mut WidgetMap, app: &AppPtr)
@@ -247,25 +283,22 @@ impl Component {
                             self.add_or_show_widgets(container, wmap, app);
                         }
                         Component::NonLeaf(my_node) => { //case both non leafs
-                            other_node.children.iter().for_each(|(name, v)| {
-                                if !my_node.children.contains_key(name) {
+                            let mut new_cont = container;
+                            if let Some(ref widget_info) = my_node.widget {
+                                let gtk_widget = wmap[&widget_info.id].get_or_make(&widget_info, app);
+                                new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
+                            }
+                            other_node.children.iter().for_each(|(id, v)| {
+                                if !my_node.children.contains_key(id) {
                                     v.hide_highest_widgets(wmap);
                                 }
                                 else { //common node, recurse
-                                    let ref my_child = my_node.children[name];
-                                    if let Some(ref child_widget) = my_node.widget {
-                                        let gtk_widget = wmap.remove(name).unwrap_or(child_widget.make_widget(app));
-                                        let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
-                                        my_child.render_diff(Some(v), new_cont, wmap, app);
-                                        wmap.insert(name.clone(), gtk_widget);
-                                    }
-                                    else {
-                                        my_child.render_diff(Some(v), container, wmap, app);
-                                    }
+                                    let ref my_child = my_node.children[id];
+                                    my_child.render_diff(Some(v), new_cont, wmap, app);
                                 }
                             });
-                            my_node.children.iter().for_each(|(name, v)| {
-                                if !other_node.children.contains_key(name) { //add all new nodes
+                            my_node.children.iter().for_each(|(id, v)| {
+                                if !other_node.children.contains_key(id) { //add all new nodes
                                     v.add_or_show_widgets(container, wmap, app);
                                 }
                             });
