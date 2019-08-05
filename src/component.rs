@@ -70,6 +70,9 @@ impl MyWidgetInfo {
     pub fn set(&mut self, w: Widget) {
         self.widget = Some(w);
     }
+    fn get_container(&self) -> Option<&Container> {
+        self.widget.as_ref().map(|c| c.downcast_ref::<Container>().unwrap())
+    }
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -274,15 +277,15 @@ impl Component {
                         }
                         Component::Leaf(widget_info) => {
                             let gtk_widget = wmap.get_mut(&widget_info.id).unwrap().get_or_make(widget_info, app); 
-                            let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
-                            add_parent_maybe(&gtk_widget, new_cont);
+                            let cont = wmap[container_id].get_container().unwrap();
+                            add_parent_maybe(&gtk_widget, cont);
                             gtk_widget.show();
                         }
                     } 
                 });
             }
         }
-        let cont = wmap[container_id].get().unwrap().downcast_ref::<Container>().unwrap();
+        let cont = wmap[container_id].get_container().unwrap();
         if !cont.is_visible() {
             cont.show();
         }
