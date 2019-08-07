@@ -45,7 +45,7 @@ pub struct AppState {
     pub data: RefCell<DataModel>,
     pub async_request: Arc<Mutex<RequestStatus>>,
     ui_tree: RefCell<Option<Component>>,
-    pub widgets: RefCell<WidgetMap>
+    pub widgets: WidgetMap
 }
 
 pub type AppPtr = Rc<AppState>;
@@ -64,7 +64,7 @@ impl AppState {
             data: RefCell::new(DataModel::new()),
             async_request: Arc::new(Mutex::new(RequestStatus::NoReq)),
             ui_tree: RefCell::new(None),
-            widgets: RefCell::new(widgets)
+            widgets
         };
         Rc::new(app_state)
     }
@@ -111,7 +111,7 @@ pub fn build_ui(state: AppPtr) {
     app_tree.render_diff(
         state.ui_tree.borrow().as_ref(),
         &MainWindow,
-        &mut state.widgets.borrow_mut(),
+        &state.widgets,
         &state);
     *state.ui_tree.borrow_mut() = Some(app_tree);
 }

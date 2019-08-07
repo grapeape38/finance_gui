@@ -7,7 +7,10 @@ use crate::datamodel::{AsyncCallback, poll_response};
 
 use gtk::{prelude::*, Widget, Container, Button, Window, Label};
 use std::iter::FromIterator;
+use std::ops::Deref;
 use std::rc::Rc;
+use std::mem;
+use std::cell::RefCell;
 use hyper::rt::Future;
 use std::marker::PhantomData;
 use serde_json::Value;
@@ -44,34 +47,56 @@ fn call<T: gtk::Cast + gtk::IsA<Widget>>(cb: &Rc<CallbackT>, app: &AppPtr) -> Bo
 }
 
 pub struct MyWidgetInfo {
-    widget: Option<Widget>,
+    widget: RefCell<Option<Widget>>,
     factory: Box<dyn WidgetFactory> 
 }
 
 impl MyWidgetInfo {
     pub fn new(factory: Box<dyn WidgetFactory>) -> MyWidgetInfo {
         MyWidgetInfo {
-            widget: None,
+            widget: RefCell::new(None),
             factory
         }
     }
-    fn get_or_make(&mut self, info: &WidgetInfo, app: &AppPtr) -> &Widget {
-        match self.widget {
-            Some(ref w) => w,
-            None => {
-                self.widget = Some(self.factory.make(info, app));
-                self.widget.as_ref().unwrap()
-            }
-        }
+    fn get_or_make(&self, info: &WidgetInfo, app: &AppPtr) -> WidgetGuard {
+        let widget = match self.widget.borrow_mut().take() {
+                Some(w) => w,
+                None => {
+                    self.factory.make(info, app)
+                }
+        };
+        WidgetGuard { widget_info: self, widget }
     }
-    fn get(&self) -> Option<&Widget> {
-        self.widget.as_ref()
+    fn get(&self) -> WidgetGuard {
+        WidgetGuard{ widget_info: self, widget: self.widget.borrow_mut().take().unwrap() }
     }
     pub fn set(&mut self, w: Widget) {
-        self.widget = Some(w);
+        *self.widget.borrow_mut() = Some(w);
     }
-    fn get_container(&self) -> Option<&Container> {
-        self.widget.as_ref().map(|c| c.downcast_ref::<Container>().unwrap())
+}
+
+struct WidgetGuard<'a> {
+    widget_info: &'a MyWidgetInfo,
+    widget: Widget
+}
+
+impl<'a> Drop for WidgetGuard<'a> {
+    fn drop(&mut self) {
+        let widget = mem::replace(&mut self.widget, Label::new(None).upcast::<Widget>());
+        *self.widget_info.widget.borrow_mut() = Some(widget);
+    }
+}
+
+impl <'a> WidgetGuard <'a> {
+    fn to_container(&self) -> &Container {
+        self.widget.downcast_ref::<Container>().unwrap()
+    }
+}
+
+impl <'a> Deref for WidgetGuard<'a> {
+    type Target = Widget;
+    fn deref(&self) -> &Widget {
+        &self.widget
     }
 }
 
@@ -83,8 +108,6 @@ pub enum EWidget {
     SignedInLabel, 
     MainWindow
 }
-
-
 
 pub trait WidgetFactory {
     fn make(&self, info: &WidgetInfo, app: &AppPtr) -> Widget;
@@ -119,10 +142,6 @@ impl WidgetFactory for Factory<Label> {
 
 impl WidgetFactory for Factory<Window> {
     fn make(&self, _: &WidgetInfo, _: &AppPtr) -> Widget {
-        /*window.set_title("First GTK+ Program");
-        window.set_border_width(10);
-        window.set_position(gtk::WindowPosition::Center);
-        window.set_default_size(350, 70);*/
         Window::new(gtk::WindowType::Toplevel).upcast::<Widget>()
     }
 }
@@ -240,14 +259,14 @@ impl Component {
                     match child {
                         Component::NonLeaf(child_node) => {
                             if let Some(ref widget_info) = child_node.widget {
-                                wmap[&widget_info.id].get().unwrap().hide();
+                                wmap[&widget_info.id].get().hide();
                             }
                             else { 
                                 child.hide_highest_widgets(wmap);
                             }
                         }
                         Component::Leaf(widget_info) => {
-                            wmap[&widget_info.id].get().unwrap().hide();
+                            wmap[&widget_info.id].get().hide();
                         }
                     } 
                 });
@@ -255,7 +274,7 @@ impl Component {
         }
     } 
 
-    fn add_or_show_widgets(&self, container_id: &EWidget, wmap: &mut WidgetMap, app: &AppPtr) {
+    fn add_or_show_widgets(&self, container_id: &EWidget, wmap: &WidgetMap, app: &AppPtr) {
         match self {
             Component::Leaf(_) => { }
             Component::NonLeaf(node) => {
@@ -264,34 +283,35 @@ impl Component {
                         Component::NonLeaf(child_node) => {
                             if let Some(ref widget_info) = child_node.widget {
                                 {
-                                    let gtk_widget = wmap.get_mut(&widget_info.id).unwrap().get_or_make(widget_info, app); 
-                                    let new_cont = gtk_widget.downcast_ref::<Container>().unwrap();
-                                    add_parent_maybe(&gtk_widget, new_cont);
+                                    let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
+                                    let parent_guard =  wmap[container_id].get();
+                                    add_parent_maybe(&gtk_widget, parent_guard.to_container());
                                 }
                                 child.add_or_show_widgets(&widget_info.id, wmap, app);
-                                wmap.get(&widget_info.id).unwrap().get().unwrap().show();
+                                wmap[&widget_info.id].get().show();
                             }
                             else { 
                                 child.add_or_show_widgets(container_id, wmap, app);
                             }
                         }
                         Component::Leaf(widget_info) => {
-                            let gtk_widget = wmap.get_mut(&widget_info.id).unwrap().get_or_make(widget_info, app); 
-                            let cont = wmap[container_id].get_container().unwrap();
-                            add_parent_maybe(&gtk_widget, cont);
+                            let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
+                            let parent_guard = wmap[container_id].get();
+                            add_parent_maybe(&gtk_widget, parent_guard.to_container());
                             gtk_widget.show();
                         }
                     } 
                 });
             }
         }
-        let cont = wmap[container_id].get_container().unwrap();
+        let guard = wmap[container_id].get();
+        let cont = guard.to_container();
         if !cont.is_visible() {
             cont.show();
         }
     }
 
-    pub fn render_diff(&self, comp_old: Option<&Component>, container_id: &EWidget, wmap: &mut WidgetMap, app: &AppPtr)
+    pub fn render_diff(&self, comp_old: Option<&Component>, container_id: &EWidget, wmap: &WidgetMap, app: &AppPtr)
     {
         if let Some(comp_old) = comp_old {
             match comp_old {
