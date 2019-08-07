@@ -64,7 +64,6 @@ pub struct DataModel {
     pub signed_in: bool,
     transactions: Option<Value>,
     auth_params: AuthParams,
-    req_status: Arc<Mutex<RequestStatus>>
 }
 
 impl DataModel {
@@ -73,7 +72,6 @@ impl DataModel {
             signed_in: false,
             auth_params: AuthParams::new().unwrap(),
             transactions: None,
-            req_status: Arc::new(Mutex::new(RequestStatus::NoReq)) 
         }
     }
 }

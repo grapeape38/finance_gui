@@ -276,7 +276,12 @@ impl Component {
 
     fn add_or_show_widgets(&self, container_id: &EWidget, wmap: &WidgetMap, app: &AppPtr) {
         match self {
-            Component::Leaf(_) => { }
+            Component::Leaf(widget_info) => { 
+                let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
+                let parent_guard = wmap[container_id].get();
+                add_parent_maybe(&gtk_widget, parent_guard.to_container());
+                gtk_widget.show();
+            }
             Component::NonLeaf(node) => {
                 node.children.iter().for_each(|(_, child)| {
                     match child {
@@ -294,11 +299,8 @@ impl Component {
                                 child.add_or_show_widgets(container_id, wmap, app);
                             }
                         }
-                        Component::Leaf(widget_info) => {
-                            let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
-                            let parent_guard = wmap[container_id].get();
-                            add_parent_maybe(&gtk_widget, parent_guard.to_container());
-                            gtk_widget.show();
+                        Component::Leaf(_) => {
+                            child.add_or_show_widgets(container_id, wmap, app);
                         }
                     } 
                 });
@@ -328,7 +330,7 @@ impl Component {
                                     v.hide_highest_widgets(wmap);
                                 }
                                 else { //common node, recurse
-                                    let ref my_child = my_node.children[id];
+                                    let my_child = &my_node.children[id];
                                     my_child.render_diff(Some(v), new_cont, wmap, app);
                                 }
                             });
