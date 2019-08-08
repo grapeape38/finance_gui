@@ -62,8 +62,8 @@ impl<F> AsyncCallback<F>
 
 pub struct DataModel { 
     pub signed_in: bool,
-    transactions: Option<Value>,
-    auth_params: AuthParams,
+    pub transactions: Option<Value>,
+    pub auth_params: AuthParams,
 }
 
 impl DataModel {

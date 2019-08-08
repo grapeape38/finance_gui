@@ -73,23 +73,25 @@ impl AppState {
 fn create_widgets() -> HashMap<EWidget, MyWidgetInfo> {
     c_map!(
         SignInButton => Button,
-        SignedInLabel => Label,
+        SignedInFrame => gtk::Frame,
         GetTransButton => Button,
-        MainWindow => Window
+        MainWindow => Window,
+        MainBox => gtk::Box
     )
 }
 
 fn sign_in_page(_: AppPtr) -> Component {
     Component::new_leaf(SignInButton)
-        .with_attributes(map!("label" => "Sign in!"))
+        .with_attributes(map!("label" => "Sign in!".to_string()))
         .with_callback("clicked", sign_in_cb())
 }
 
 fn user_page(state: AppPtr) -> Component {
-    let label = Component::new_leaf(SignedInLabel)
-        .with_attributes(map!("text" => "You are signed in!"));
+    let label_text = format!("You are signed in! Your access token is: {}", state.data.borrow().auth_params.access_token.as_ref().unwrap());
+    let label = Component::new_leaf(SignedInFrame)
+        .with_attributes(map!("label" => label_text));
     let button = Component::new_leaf(GetTransButton)
-        .with_attributes(map!("label" => "Get transactions"))
+        .with_attributes(map!("label" => "Get transactions".to_string()))
         .with_callback("clicked", get_transactions_cb());
     let v = vec![label, button];
     Component::new_node(v, state, None, "user_page")
@@ -103,11 +105,12 @@ fn main_app(state: AppPtr) -> Component {
     else {
         v.push(user_page as ComponentFn);
     }
-    Component::new_node(v, state, None, "main_app")
+    Component::new_node(v, state, Some(MainBox), "main_app")
 }
 
 pub fn build_ui(state: AppPtr) {
-    let app_tree = main_app(Rc::clone(&state));
+    let v = vec![main_app as ComponentFn];
+    let app_tree = Component::new_node(v, Rc::clone(&state), Some(MainWindow), "window");
     app_tree.render_diff(
         state.ui_tree.borrow().as_ref(),
         &MainWindow,
