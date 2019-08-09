@@ -8,17 +8,13 @@ use crate::datamodel::{AsyncCallback, poll_response};
 use gtk::{prelude::*, Widget, Container, Button, Window, Label};
 use std::iter::FromIterator;
 use std::ops::Deref;
-use std::fmt::Debug;
 use std::rc::Rc;
-use std::mem;
 use std::cell::RefCell;
 use hyper::rt::Future;
 use std::marker::PhantomData;
 use serde_json::Value;
 
 use std::collections::{HashMap};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 pub trait CallbackT {
     fn do_cb(&self, app: &AppPtr, widget: &Widget);
@@ -63,15 +59,15 @@ impl MyWidgetInfo {
     }
     fn get_or_make(&self, info: &WidgetInfo, app: &AppPtr) -> WidgetGuard {
         let widget = match self.widget.borrow_mut().take() {
-                Some(w) => w,
+                Some(w) => Some(w),
                 None => {
-                    self.factory.make(info, app)
+                    Some(self.factory.make(info, app))
                 }
         };
         WidgetGuard { widget_info: self, widget }
     }
     fn get(&self) -> WidgetGuard {
-        WidgetGuard{ widget_info: self, widget: self.widget.borrow_mut().take().unwrap() }
+        WidgetGuard{ widget_info: self, widget: self.widget.borrow_mut().take() }
     }
     pub fn set(&mut self, w: Widget) {
         *self.widget.borrow_mut() = Some(w);
@@ -80,26 +76,25 @@ impl MyWidgetInfo {
 
 struct WidgetGuard<'a> {
     widget_info: &'a MyWidgetInfo,
-    widget: Widget
+    widget: Option<Widget>
 }
 
 impl<'a> Drop for WidgetGuard<'a> {
     fn drop(&mut self) {
-        let widget = mem::replace(&mut self.widget, Label::new(None).upcast::<Widget>());
-        *self.widget_info.widget.borrow_mut() = Some(widget);
+        *self.widget_info.widget.borrow_mut() = self.widget.take();
     }
 }
 
 impl <'a> WidgetGuard <'a> {
     fn to_container(&self) -> &Container {
-        self.widget.downcast_ref::<Container>().unwrap()
+        self.widget.as_ref().map(|c| c.downcast_ref::<Container>().unwrap()).unwrap()
     }
 }
 
 impl <'a> Deref for WidgetGuard<'a> {
     type Target = Widget;
     fn deref(&self) -> &Widget {
-        &self.widget
+        &self.widget.as_ref().unwrap()
     }
 }
 
@@ -162,18 +157,22 @@ impl WidgetFactory for Factory<gtk::Frame> {
     }
 }
 
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+pub enum ComponentID {
+    WidgetID(EWidget),
+    NodeID(&'static str)
+}
+
 pub struct WidgetInfo {
     attributes: HashMap<&'static str, String>,
     callbacks: HashMap<&'static str, Rc<CallbackT>>,
-    id: EWidget
 }
 
 impl WidgetInfo {
-    fn new(id: EWidget) -> Self {
+    fn new() -> Self {
         WidgetInfo {
             attributes: HashMap::new(),
             callbacks: HashMap::new(),
-            id
         }
     }
     fn with_attributes(mut self, attributes: HashMap<&'static str, String>) -> Self {
@@ -186,15 +185,10 @@ impl WidgetInfo {
     }
 }
 
-pub enum Component {
-    NonLeaf(Node),
-    Leaf(WidgetInfo)
-}
-
-pub struct Node {
+pub struct Component {
     widget: Option<WidgetInfo>,
-    id: u64,
-    children: HashMap<u64, Component>
+    id: ComponentID,
+    children: HashMap<ComponentID, Component>
 }
 
 pub type WidgetMap = HashMap<EWidget, MyWidgetInfo>;
@@ -211,170 +205,95 @@ fn remove_child_maybe(child: &Widget, container: &Container) {
     }
 }
 
-fn remove_child_maybe_id(child_id: &EWidget, parent_id: &EWidget, wmap: &WidgetMap) {
-    if parent_id != child_id {
-        let parent = wmap[parent_id].get();
-        let child = wmap[child_id].get();
-        remove_child_maybe(&(*child), parent.to_container());
-    }
-}
-
 impl Component {
     pub fn new_leaf(id: EWidget) -> Component {
-        Component::Leaf(WidgetInfo::new(id))
+        Component {
+            widget: Some(WidgetInfo::new()),
+            children: HashMap::new(),
+            id: ComponentID::WidgetID(id)
+        }
     }
-    pub fn new_node<T>(v: Vec<T>, state: AppPtr, container_id: Option<EWidget>, id: &'static str) -> Component
+    pub fn new_node<T>(v: Vec<T>, state: AppPtr, id: ComponentID) -> Component
             where T: ToComponent
     {
         let children = HashMap::from_iter(
             v.into_iter().map(|f| {
                 let comp = f.to_component(Rc::clone(&state));
-                match comp {
-                    Component::Leaf(ref widget_info) => (widget_info.id.clone() as u64, comp),
-                    Component::NonLeaf(ref node) => (node.id, comp)
-                }
+                (comp.id.clone(), comp)
             })
         );
-        let mut s = DefaultHasher::new();
-        id.hash(&mut s);
-        let container = container_id.map(|c| WidgetInfo::new(c));
-        Component::NonLeaf(Node {
-            widget: container,
-            id: s.finish(),
+        let widget = match id {
+            ComponentID::WidgetID(_) => Some(WidgetInfo::new()),
+            ComponentID::NodeID(_) => None
+        };
+        Component {
+            widget,
+            id,
             children
-        })
+        }
     }
 
     pub fn with_attributes(self, attributes: HashMap<&'static str, String>) -> Self {
-        match self {
-            Component::Leaf(widget_info) => {
-                Component::Leaf(widget_info.with_attributes(attributes))
-            }
-            Component::NonLeaf(node) => {
-                if let Some(widget_info) = node.widget {
-                    Component::NonLeaf(Node {
-                        widget: Some(widget_info.with_attributes(attributes)),
-                        id: node.id,
-                        children: node.children
-                    })
-                }
-                else {
-                    Component::NonLeaf(node)
-                }
-            }
+        Component {
+            widget: self.widget.map(|w| w.with_attributes(attributes)),
+            ..self
         }
     }
 
     pub fn with_callback(self, cb_type: &'static str, callback: Rc<CallbackT>) -> Self {
-        match self {
-            Component::Leaf(widget_info) => {
-                Component::Leaf(widget_info.with_callback(cb_type, callback))
-            }
-            Component::NonLeaf(node) => {
-                if let Some(widget_info) = node.widget {
-                    Component::NonLeaf(Node {
-                        widget: Some(widget_info.with_callback(cb_type, callback)),
-                        id: node.id,
-                        children: node.children
-                    })
-                }
-                else {
-                    Component::NonLeaf(node)
-                }
-            }
+        Component {
+            widget: self.widget.map(|w| w.with_callback(cb_type, callback)),
+            ..self
         }
     }
+
     fn remove_highest_widgets(&self, container_id: &EWidget, wmap: &WidgetMap) {
-        match self {
-            Component::Leaf(widget_info) => { 
-                println!("Removing leaf widget {:?}", widget_info.id);
-                remove_child_maybe_id(&widget_info.id, container_id, wmap);
+        if let ComponentID::WidgetID(ref id) = self.id {
+            if container_id != id {
+                let parent = wmap[container_id].get();
+                let child = wmap[id].get();
+                remove_child_maybe(&(*child), parent.to_container());
             }
-            Component::NonLeaf(node) => {
-                node.children.iter().for_each(|(_, child)| {
-                    match child {
-                        Component::NonLeaf(child_node) => {
-                            if let Some(ref widget_info) = child_node.widget {
-                                println!("Removing container {:?}", widget_info.id);
-                                remove_child_maybe_id(&widget_info.id, container_id, wmap);
-                            }
-                            else { 
-                                child.remove_highest_widgets(container_id, wmap);
-                            }
-                        }
-                        Component::Leaf(widget_info) => {
-                            println!("Removing leaf widget {:?}", widget_info.id);
-                            remove_child_maybe_id(&widget_info.id, container_id, wmap);
-                        }
-                    } 
-                });
-            }
+        }
+        else {
+            self.children.iter().for_each(|(_, child)| {
+                child.remove_highest_widgets(container_id, wmap);
+            });
         }
     } 
 
     fn hide_highest_widgets(&self, wmap: &WidgetMap) {
-        match self {
-            Component::Leaf(widget_info) => { wmap[&widget_info.id].get().hide() }
-            Component::NonLeaf(node) => {
-                node.children.iter().for_each(|(_, child)| {
-                    match child {
-                        Component::NonLeaf(child_node) => {
-                            if let Some(ref widget_info) = child_node.widget {
-                                println!("Hiding container {:?}", widget_info.id);
-                                wmap[&widget_info.id].get().hide();
-                            }
-                            else { 
-                                child.hide_highest_widgets(wmap);
-                            }
-                        }
-                        Component::Leaf(widget_info) => {
-                            println!("Hiding leaf widget {:?}", widget_info.id);
-                            wmap[&widget_info.id].get().hide();
-                        }
-                    } 
-                });
-            }
+        if let ComponentID::WidgetID(ref id) = self.id {
+            wmap[id].get().hide();
         }
-    } 
-
+        else {
+            self.children.iter().for_each(|(_, child)| {
+                child.hide_highest_widgets(wmap);
+            });
+        }
+    }
+        
     fn add_or_show_widgets(&self, container_id: &EWidget, wmap: &WidgetMap, app: &AppPtr) {
-        println!("Adding to {:?}", container_id);
-        match self {
-            Component::Leaf(widget_info) => { 
-                println!("Adding child {:?} to container {:?}", widget_info.id, container_id);
-                let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
-                let parent_guard = wmap[container_id].get();
-                add_child_maybe(&gtk_widget, parent_guard.to_container());
-                gtk_widget.show();
-            }
-            Component::NonLeaf(node) => {
-                let mut i = 0;
-                node.children.iter().for_each(|(_, child)| {
-                    i+=1;
-                    println!("Child: {}", i);
-                    match child {
-                        Component::NonLeaf(child_node) => {
-                            if let Some(ref widget_info) = child_node.widget {
-                                {
-                                    println!("Adding child {:?} to container {:?}", widget_info.id, container_id);
-                                    let gtk_widget = wmap[&widget_info.id].get_or_make(widget_info, app); 
-                                    let parent_guard =  wmap[container_id].get();
-                                    add_child_maybe(&gtk_widget, parent_guard.to_container());
-                                }
-                                child.add_or_show_widgets(&widget_info.id, wmap, app);
-                                wmap[&widget_info.id].get().show();
-                            }
-                            else { 
-                                child.add_or_show_widgets(container_id, wmap, app);
-                            }
-                        }
-                        Component::Leaf(_) => {
-                            child.add_or_show_widgets(container_id, wmap, app);
-                        }
-                    } 
-                });
+        println!("On component: {:?}, adding to container: {:?}", self.id, container_id);
+        let mut new_cont_id = container_id;
+        if let ComponentID::WidgetID(ref id) = self.id {
+            if container_id != id {
+                new_cont_id = id;
+                println!("Adding child {:?} to container {:?}", id, container_id);
+                if let Some(ref info) = self.widget {
+                    let gtk_widget = wmap[id].get_or_make(info, app);
+                    let parent_guard = wmap[container_id].get();
+                    add_child_maybe(&(*gtk_widget), parent_guard.to_container());
+                    gtk_widget.show();
+                }
             }
         }
+        let mut i = 0;
+        self.children.iter().for_each(|(_, child)| {
+            i+=1;
+            println!("Child: {}", i);
+            child.add_or_show_widgets(new_cont_id, wmap, app);
+        });
         let guard = wmap[container_id].get();
         let cont = guard.to_container();
         if !cont.is_visible() {
@@ -385,50 +304,28 @@ impl Component {
     pub fn render_diff(&self, comp_old: Option<&Component>, container_id: &EWidget, wmap: &WidgetMap, app: &AppPtr)
     {
         if let Some(comp_old) = comp_old {
-            match comp_old {
-                Component::NonLeaf(other_node) => {
-                    match self {
-                        Component::Leaf(_) => { //other is non leaf, you are leaf, remove all other's children
-                            comp_old.remove_highest_widgets(container_id, wmap);
-                            //comp_old.hide_highest_widgets(wmap);
-                            self.add_or_show_widgets(container_id, wmap, app);
-                        }
-                        Component::NonLeaf(my_node) => { //case both non leafs
-                            other_node.children.iter().for_each(|(id, v)| {
-                                println!("Comparing other child {:?} to my children", id);
-                                if !my_node.children.contains_key(id) {
-                                    //v.hide_highest_widgets(wmap);
-                                    v.remove_highest_widgets(container_id, wmap);
-                                }
-                                else { //common node, recurse
-                                    println!("Common child");
-                                    let my_child = &my_node.children[id];
-                                    let new_cont = match my_child {
-                                        Component::Leaf(_) => container_id,
-                                        Component::NonLeaf(child_node) => child_node.widget.as_ref().map(|w| &w.id).unwrap_or(container_id)
-                                    };
-                                    my_child.render_diff(Some(v), new_cont, wmap, app);
-                                }
-                            });
-                            my_node.children.iter().for_each(|(id, v)| {
-                                println!("Comparing my child {:?} to other children", id);
-                                if !other_node.children.contains_key(id) { //add all new nodes
-                                    v.add_or_show_widgets(container_id, wmap, app);
-                                }
-                            });
-                        }
+            let mut new_cont_id = container_id;
+            if let ComponentID::WidgetID(ref id) = self.id {
+                new_cont_id = id;
+            }
+            println!("Comparing {:?} to {:?}", self.id, comp_old.id);
+            if comp_old.id != self.id {
+                comp_old.remove_highest_widgets(container_id, wmap);
+            }
+            else {
+                comp_old.children.iter().for_each(|(id, old_child)| {
+                    if let Some(new_child) = self.children.get(id) {
+                        new_child.render_diff(Some(old_child), new_cont_id, wmap, app);
                     }
-                }
-                Component::Leaf(_) => {
-                    match self {
-                        Component::NonLeaf(_) => { //you are non leaf, other is leaf, remove all other's children
-                            //comp_old.hide_highest_widgets(wmap);
-                            comp_old.remove_highest_widgets(container_id, wmap);
-                            self.add_or_show_widgets(container_id, wmap, app);
-                        }
-                        _ => {} //will never compare two leaves
+                    else {
+                        old_child.remove_highest_widgets(new_cont_id, wmap);
                     }
-                }
+                });
+                self.children.iter().for_each(|(id, child)| {
+                    if !comp_old.children.contains_key(id) {
+                        child.add_or_show_widgets(new_cont_id, wmap, app);
+                    }
+                });
             }
         }
         else { //empty previous state

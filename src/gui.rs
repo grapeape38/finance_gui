@@ -7,6 +7,7 @@ use crate::component;
 
 use datamodel::*;
 use component::*;
+use component::ComponentID::*;
 
 use gio::prelude::*;
 use gtk::{prelude::*, Widget, Window, Button, Label, Container};
@@ -94,7 +95,7 @@ fn user_page(state: AppPtr) -> Component {
         .with_attributes(map!("label" => "Get transactions".to_string()))
         .with_callback("clicked", get_transactions_cb());
     let v = vec![label, button];
-    Component::new_node(v, state, None, "user_page")
+    Component::new_node(v, state, NodeID("user_page"))
 }
 
 fn main_app(state: AppPtr) -> Component {
@@ -105,12 +106,12 @@ fn main_app(state: AppPtr) -> Component {
     else {
         v.push(user_page as ComponentFn);
     }
-    Component::new_node(v, state, Some(MainBox), "main_app")
+    Component::new_node(v, state, WidgetID(MainBox))
 }
 
 pub fn build_ui(state: AppPtr) {
     let v = vec![main_app as ComponentFn];
-    let app_tree = Component::new_node(v, Rc::clone(&state), Some(MainWindow), "window");
+    let app_tree = Component::new_node(v, Rc::clone(&state), WidgetID(MainWindow));
     app_tree.render_diff(
         state.ui_tree.borrow().as_ref(),
         &MainWindow,
