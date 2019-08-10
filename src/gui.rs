@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::cell::RefCell;
 use std::collections::{HashMap};
+use serde_json::Value;
 
 macro_rules! map(
     { $($key:expr => $value:expr),+ } => {
@@ -44,7 +45,7 @@ macro_rules! c_map(
 
 pub struct AppState {
     pub data: RefCell<DataModel>,
-    pub async_request: Arc<Mutex<RequestStatus>>,
+    pub async_request: Arc<Mutex<ReqStatus<Value>>>,
     ui_tree: RefCell<Option<Component>>,
     pub widgets: WidgetMap
 }
@@ -54,7 +55,7 @@ pub type AppPtr = Rc<AppState>;
 impl AppState {
     fn new_ptr(app: &gtk::Application) -> AppPtr {
         let window = gtk::ApplicationWindow::new(app);
-        window.set_title("First GTK+ Program");
+        window.set_title("Finance Viewer App");
         window.set_border_width(10);
         window.set_position(gtk::WindowPosition::Center);
         window.set_default_size(350, 70);
@@ -63,7 +64,7 @@ impl AppState {
         widgets.get_mut(&MainWindow).unwrap().set(window.upcast::<Widget>());
         let app_state = AppState {
             data: RefCell::new(DataModel::new()),
-            async_request: Arc::new(Mutex::new(RequestStatus::NoReq)),
+            async_request: Arc::new(Mutex::new(Ok(RespType::None))),
             ui_tree: RefCell::new(None),
             widgets
         };
@@ -74,44 +75,53 @@ impl AppState {
 fn create_widgets() -> HashMap<EWidget, MyWidgetInfo> {
     c_map!(
         SignInButton => Button,
+        SignInLoading => gtk::Frame,
         SignedInFrame => gtk::Frame,
+        ErrorPage => gtk::Frame,
         GetTransButton => Button,
         MainWindow => Window,
         MainBox => gtk::Box
     )
 }
 
-fn sign_in_page(_: AppPtr) -> Component {
-    Component::new_leaf(SignInButton)
+fn sign_in_page(_: &AppPtr) -> Component {
+    new_leaf(SignInButton)
         .with_attributes(map!("label" => "Sign in!".to_string()))
         .with_callback("clicked", sign_in_cb())
 }
 
-fn user_page(state: AppPtr) -> Component {
+fn user_page(state: &AppPtr) -> Component {
     let label_text = format!("You are signed in! Your access token is: {}", state.data.borrow().auth_params.access_token.as_ref().unwrap());
-    let label = Component::new_leaf(SignedInFrame)
+    let label = new_leaf(SignedInFrame)
         .with_attributes(map!("label" => label_text));
-    let button = Component::new_leaf(GetTransButton)
-        .with_attributes(map!("label" => "Get transactions".to_string()))
-        .with_callback("clicked", get_transactions_cb());
+    let button = new_leaf(GetTransButton)
+        .with_attributes(map!("label" => "Get transactions".to_string()));
+        //.with_callback("clicked", get_transactions_cb());
     let v = vec![label, button];
-    Component::new_node(v, state, NodeID("user_page"))
+    new_node(v, NodeID("user_page"))
 }
 
-fn main_app(state: AppPtr) -> Component {
+fn main_app(state: &AppPtr) -> Component {
     let mut v = Vec::new();
-    if !state.data.borrow().signed_in {
-        v.push(sign_in_page as ComponentFn);
+    let signed_in = state.data.borrow().signed_in.clone();
+    match signed_in {
+        Ok(RespType::InProgress) => {
+            v.push(new_leaf(SignInLoading).with_attributes(map!("label" => "Signing in...".to_string())));
+        },
+        Ok(RespType::Done(true)) => {
+            v.push(user_page(state));
+        }
+        Err(e) => {
+            v.push(new_leaf(ErrorPage).with_attributes(map!("label" => e)));
+        }
+        _ => { v.push(sign_in_page(state)); }
     }
-    else {
-        v.push(user_page as ComponentFn);
-    }
-    Component::new_node(v, state, WidgetID(MainBox))
+    new_node(v, WidgetID(MainBox))
 }
 
 pub fn build_ui(state: AppPtr) {
-    let v = vec![main_app as ComponentFn];
-    let app_tree = Component::new_node(v, Rc::clone(&state), WidgetID(MainWindow));
+    let v = vec![main_app(&state)];
+    let app_tree = new_node(v, WidgetID(MainWindow));
     app_tree.render_diff(
         state.ui_tree.borrow().as_ref(),
         &MainWindow,

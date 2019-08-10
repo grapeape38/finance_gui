@@ -15,53 +15,67 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use plaid::*;
 
-#[derive(Debug, Clone)]
-pub enum RequestType {
-    NoReq,
-    SignIn,
-    GetTransactions,
-}
-
-#[derive(Debug, Clone)]
-pub enum RequestStatus {
-    NoReq,
+#[derive(Clone)]
+pub enum RespType<T> {
+    None,
     InProgress,
-    Ok(Value),
-    Err(String)
+    Done(T)
 }
 
-pub struct AsyncCallback<F> 
-where F: Future<Item=Value, Error=String> + Send + 'static
-{
-    pub req_type: RequestType,
-    pub fut: Box<Fn(&DataModel) -> F>
-}
+pub type ReqStatus<T> = Result<RespType<T>, String>;
 
-impl<F> AsyncCallback<F> 
-    where F: Future<Item=Value, Error=String> + Send + 'static
+pub fn make_call_async<F, G>(call: F, app: &AppPtr, handle_response_fn: Rc<G>) 
+    where F: Future<Item=Value, Error=String> + Send + 'static, G: Fn(Result<Value, String>, AppPtr) + 'static
 {
-    pub fn make_call_async(&self, app: &AppPtr) {
         let app_2 = Rc::clone(app);
-        let call = (self.fut)(&app_2.data.borrow());
         let req_status = Arc::clone(&app_2.async_request);
         let req_err = Arc::clone(&req_status);
+        req_status.modify(|st| {
+            *st = Ok(RespType::InProgress);
+        });
         rt::spawn(rt::lazy(move || {
             call.and_then(move |resp_json| {
                 req_status.modify(|st| {
-                    *st = RequestStatus::Ok(resp_json);
+                    *st = Ok(RespType::Done(resp_json));
                 }).unwrap();
                 Ok(())
             }).map_err(move |e| {
                 req_err.modify(|st| {
-                    *st = RequestStatus::Err(e);
+                    *st = Err(e);
                 }).unwrap();
             })
         }));
+        timeout_add_seconds(1, move || {
+            poll_response(Rc::clone(&app_2), Rc::clone(&handle_response_fn))
+        });
+}
+
+
+pub fn poll_response<G>(app: AppPtr, handle_response_fn: Rc<G>) -> Continue
+    where G: Fn(Result<Value, String>, AppPtr)
+{
+    if let Ok(status) = app.async_request.try_lock() {
+        match *status {
+            Ok(RespType::None) | Ok(RespType::InProgress) => {
+                println!("Not finished!");
+            }
+            Ok(RespType::Done(ref json)) => {
+                println!("Got response!");
+                handle_response_fn(Ok(json.clone()), Rc::clone(&app));
+                return Continue(false);
+            }
+            Err(ref e) => {
+                println!("Error with request: {}", e);
+                handle_response_fn(Err(e.to_string()), Rc::clone(&app));
+                return Continue(false);
+            }
+        }
     }
+    return Continue(true);
 }
 
 pub struct DataModel { 
-    pub signed_in: bool,
+    pub signed_in: Result<RespType<bool>, String>,
     pub transactions: Option<Value>,
     pub auth_params: AuthParams,
 }
@@ -69,7 +83,7 @@ pub struct DataModel {
 impl DataModel {
     pub fn new() -> DataModel {
         DataModel {
-            signed_in: false,
+            signed_in: Ok(RespType::Done(false)),
             auth_params: AuthParams::new().unwrap(),
             transactions: None,
         }
@@ -94,66 +108,20 @@ impl<T> Modify<T> for Arc<Mutex<T>> {
     }
 }
 
-fn handle_response_ok(state: AppPtr, req_type: &RequestType, json: Value) {
-    let mut state_changed = true;
-    {
-        let mut data = state.data.borrow_mut();
-        match req_type {
-            RequestType::NoReq => { state_changed = false; },
-            RequestType::SignIn => {
-                data.signed_in = true;
-                data.auth_params.access_token = Some(json["access_token"].as_str().expect("failed to get public token").to_string());
-                data.auth_params.item_id = Some(json["item_id"].as_str().expect("failed to get item id").to_string());
-            },
-            RequestType::GetTransactions => {
-                data.transactions = Some(json);
-            }
-        }
-    }
-    if state_changed {
-        build_ui(state);
-    }
-}
+pub type CallbackFn = Fn(AppPtr);
 
-pub fn poll_response(state: AppPtr, req_type: &RequestType) -> Continue {
-    let req_clone = state.async_request.modify_clone(|st| {
-        st.clone()
-    });
-    if let Some(req_clone) = req_clone {
-        match req_clone {
-            RequestStatus::NoReq | RequestStatus::InProgress => {
-                println!("Not finished!");
+pub fn sign_in_cb() -> Rc<CallbackFn> {
+    Rc::new(|app: AppPtr| {
+        app.data.borrow_mut().signed_in = Ok(RespType::InProgress);
+        make_call_async(get_access_token(), &app, Rc::new(|json: Result<Value, String>, app2: AppPtr| {
+            {
+                let mut data = app2.data.borrow_mut();
+                data.signed_in = json.as_ref().map(|_| RespType::Done(true)).map_err(|e| e.clone());
+                data.auth_params.access_token = json.as_ref().ok().map(|json| json["access_token"].as_str().expect("failed to get public token").to_string());
+                data.auth_params.item_id = json.ok().map(|json| json["item_id"].as_str().expect("failed to get item id").to_string());
             }
-            RequestStatus::Ok(json) => {
-                println!("Got response!");
-                handle_response_ok(state, req_type, json);
-                return Continue(false);
-            }
-            RequestStatus::Err(e) => {
-                println!("Error with request: {}", e);
-                return Continue(false);
-            }
-        }
-    }
-    return Continue(true);
-}
-
-pub fn sign_in_cb() -> Rc<AsyncCallback<impl Future<Item=Value, Error=String>>>
-{
-    Rc::new(AsyncCallback {
-        req_type: RequestType::SignIn,
-        fut: Box::new(|_| { get_access_token() })
-    })
-}
-
-pub fn get_transactions_cb() -> Rc<AsyncCallback<impl Future<Item=Value, Error=String>>> {
-    Rc::new(AsyncCallback {
-        req_type: RequestType::GetTransactions,
-        fut: Box::new(|data| {
-            let auth_params = data.auth_params.clone();
-            let mut ch = ClientHandle::new().unwrap();
-            ch.auth_params = auth_params;
-            ch.get_transactions()
-        })
+            build_ui(Rc::clone(&app2));
+        }));
+        build_ui(Rc::clone(&app));
     })
 }

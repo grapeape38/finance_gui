@@ -2,46 +2,27 @@ extern crate gio;
 extern crate gtk;
 
 extern crate hyper;
-use crate::gui::{AppPtr, build_ui};
-use crate::datamodel::{AsyncCallback, poll_response};
+use crate::gui::{AppPtr};
+use crate::datamodel::{CallbackFn};
 
 use gtk::{prelude::*, Widget, Container, Button, Window, Label};
 use std::iter::FromIterator;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::cell::RefCell;
-use hyper::rt::Future;
 use std::marker::PhantomData;
-use serde_json::Value;
 
 use std::collections::{HashMap};
 
-pub trait CallbackT {
-    fn do_cb(&self, app: &AppPtr, widget: &Widget);
-}
-
-impl<F> CallbackT for AsyncCallback<F> 
-where F: Future<Item=Value, Error=String> + Send + 'static
-{
-    fn do_cb(&self, app: &AppPtr, _: &Widget) {
-        let app_c = Rc::clone(app);
-        let req_type = self.req_type.clone();
-        self.make_call_async(&app_c);
-        timeout_add_seconds(1, move || {
-            poll_response(Rc::clone(&app_c), &req_type)
-        });
-    }
-}
-
-fn call<T: gtk::Cast + gtk::IsA<Widget>>(cb: &Rc<CallbackT>, app: &AppPtr) -> Box<Fn(&T) + 'static>
+fn call<T: gtk::Cast + gtk::IsA<Widget>>(cb: &Rc<CallbackFn>, app: &AppPtr) -> Box<Fn(&T) + 'static>
 {
     let app_2 = Rc::clone(app);
     let cb_2 = Rc::clone(cb);
-    Box::new(move |w: &T| {
+    Box::new(move |_: &T| {
         /*app_2.data.borrow_mut().signed_in = true;
         build_ui(Rc::clone(&app_2));*/
-        let widget = w.upcast_ref::<Widget>();
-        cb_2.do_cb(&app_2, widget);
+        //let widget = w.upcast_ref::<Widget>();
+        cb_2(Rc::clone(&app_2));
     })
 }
 
@@ -101,6 +82,8 @@ impl <'a> Deref for WidgetGuard<'a> {
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub enum EWidget {
     SignInButton,
+    SignInLoading,
+    ErrorPage,
     SignInLabel,
     GetTransButton,
     SignedInFrame, 
@@ -165,7 +148,7 @@ pub enum ComponentID {
 
 pub struct WidgetInfo {
     attributes: HashMap<&'static str, String>,
-    callbacks: HashMap<&'static str, Rc<CallbackT>>,
+    callbacks: HashMap<&'static str, Rc<CallbackFn>>,
 }
 
 impl WidgetInfo {
@@ -179,7 +162,7 @@ impl WidgetInfo {
         self.attributes = attributes;
         self
     }
-    fn with_callback(mut self, cb_type: &'static str, cb: Rc<CallbackT>) -> Self {
+    fn with_callback(mut self, cb_type: &'static str, cb: Rc<CallbackFn>) -> Self {
         self.callbacks.insert(cb_type, cb);
         self
     }
@@ -206,32 +189,7 @@ fn remove_child_maybe(child: &Widget, container: &Container) {
 }
 
 impl Component {
-    pub fn new_leaf(id: EWidget) -> Component {
-        Component {
-            widget: Some(WidgetInfo::new()),
-            children: HashMap::new(),
-            id: ComponentID::WidgetID(id)
-        }
-    }
-    pub fn new_node<T>(v: Vec<T>, state: AppPtr, id: ComponentID) -> Component
-            where T: ToComponent
-    {
-        let children = HashMap::from_iter(
-            v.into_iter().map(|f| {
-                let comp = f.to_component(Rc::clone(&state));
-                (comp.id.clone(), comp)
-            })
-        );
-        let widget = match id {
-            ComponentID::WidgetID(_) => Some(WidgetInfo::new()),
-            ComponentID::NodeID(_) => None
-        };
-        Component {
-            widget,
-            id,
-            children
-        }
-    }
+    
 
     pub fn with_attributes(self, attributes: HashMap<&'static str, String>) -> Self {
         Component {
@@ -240,7 +198,7 @@ impl Component {
         }
     }
 
-    pub fn with_callback(self, cb_type: &'static str, callback: Rc<CallbackT>) -> Self {
+    pub fn with_callback(self, cb_type: &'static str, callback: Rc<CallbackFn>) -> Self {
         Component {
             widget: self.widget.map(|w| w.with_callback(cb_type, callback)),
             ..self
@@ -334,21 +292,29 @@ impl Component {
     }
 }
 
-
-pub trait ToComponent {
-    fn to_component(self, state: AppPtr) -> Component;
-}
-
-pub type ComponentFn = fn(AppPtr) -> Component;
-
-impl ToComponent for ComponentFn {
-    fn to_component(self, state: AppPtr) -> Component {
-        self(state)
+pub fn new_leaf(id: EWidget) -> Component {
+    Component {
+        widget: Some(WidgetInfo::new()),
+        children: HashMap::new(),
+        id: ComponentID::WidgetID(id)
     }
 }
 
-impl ToComponent for Component {
-    fn to_component(self, _: AppPtr) -> Component {
-       self 
+pub fn new_node(v: Vec<Component>, id: ComponentID) -> Component
+{
+    let children = HashMap::from_iter(
+        v.into_iter().map(|c| {
+            (c.id.clone(), c)
+        })
+    );
+    let widget = match id {
+        ComponentID::WidgetID(_) => Some(WidgetInfo::new()),
+        ComponentID::NodeID(_) => None
+    };
+    Component {
+        widget,
+        id,
+        children
     }
 }
+
