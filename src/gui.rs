@@ -104,32 +104,31 @@ fn sign_in_page() -> Component {
         .with_callback("clicked", sign_in_cb())
 }
 
-fn user_page(state: &AppPtr, signed_in: &bool) -> Component {
+fn user_page(state: &AppPtr) -> Component {
     let mut v = Vec::new();
-    if *signed_in {
-        let label_text = format!("You are signed in! Your access token is: {}", state.data.borrow().auth_params.access_token.as_ref().unwrap());
-        let label = new_leaf(SignedInFrame)
-            .with_attributes(map!("label" => label_text));
-        v.push(label);
+    let label_text = format!("You are signed in! Your access token is: {}", state.data.borrow().auth_params.access_token.as_ref()
+        .unwrap_or(&("".to_string())));
+    let label = new_leaf(SignedInFrame)
+        .with_attributes(map!("label" => label_text));
+    v.push(label);
 
-        let transactions = state.data.borrow().transactions.clone();
-        let trans_button = |_: &AppPtr| {
-            new_leaf(GetTransButton)
-                .with_attributes(map!("label" => "Get transactions".to_string()))
-                .with_callback("clicked", get_trans_cb())
-        };
-        let tbox = |_: &AppPtr, t: &Vec<Transaction>| {
-            trans_box(t)
-        };
-        v.push(loading_comp(state, transactions, trans_button, tbox, "transactions", "Getting Transactions..."));
-    }
+    let transactions = state.data.borrow().transactions.clone();
+    let trans_button = |_: &AppPtr| {
+        new_leaf(GetTransButton)
+            .with_attributes(map!("label" => "Get transactions".to_string()))
+            .with_callback("clicked", get_trans_cb())
+    };
+    let tbox = |_: &AppPtr, t: &Vec<Transaction>| {
+        trans_box(t)
+    };
+    v.push(loading_comp(state, transactions, trans_button, tbox, "transactions", "Getting Transactions..."));
     new_node(v, "user_page")
 }
 
 fn main_app(state: &AppPtr) -> Component {
     let signed_in = state.data.borrow().signed_in.clone();
     let spage = |_: &AppPtr| { sign_in_page() };
-    let upage = |state: &AppPtr, b: &bool| { user_page(state, b) };
+    let upage = |state: &AppPtr, _: &bool| { user_page(state) };
     let v = vec![loading_comp(state, signed_in, spage, upage, "sign in", "Signing in...")];
     new_node(v, MainBox)
 }
@@ -140,7 +139,6 @@ pub fn build_ui(state: AppPtr) {
     app_tree.render_diff(
         state.ui_tree.borrow().as_ref(),
         &(MainWindow, "".to_string()),
-        &state.widgets,
         &state);
     *state.ui_tree.borrow_mut() = Some(app_tree);
 }

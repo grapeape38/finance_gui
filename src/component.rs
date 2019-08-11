@@ -164,7 +164,8 @@ impl Component {
         }
     }
 
-    fn remove_highest_widgets(&self, container_id: &WidgetKey, wmap: &WidgetMap) {
+    fn remove_highest_widgets(&self, container_id: &WidgetKey, app: &AppPtr) {
+        let wmap = &app.widgets;
         if let ComponentID::WidgetID(ref id) = self.id {
             if container_id != id {
                 let parent = wmap[&container_id.0].get(&container_id.1);
@@ -176,7 +177,7 @@ impl Component {
         else {
             self.children.m.iter().for_each(|(id, child)| {
                 println!("Removing child {:?} from container {:?}", id, container_id);
-                child.remove_highest_widgets(container_id, wmap);
+                child.remove_highest_widgets(container_id, app);
             });
         }
     } 
@@ -192,8 +193,9 @@ impl Component {
         }
     }
         
-    fn add_or_show_widgets(&self, container_id: &WidgetKey, wmap: &WidgetMap, app: &AppPtr) {
+    fn add_or_show_widgets(&self, container_id: &WidgetKey, app: &AppPtr) {
         println!("On component: {:?}, adding to container: {:?}", self.id, container_id);
+        let wmap = &app.widgets;
         let mut new_cont_id = container_id;
         if let ComponentID::WidgetID(ref id) = self.id {
             if container_id != id {
@@ -208,7 +210,7 @@ impl Component {
             }
         }
         self.children.v.iter().for_each(|id| {
-            self.children.m[id].add_or_show_widgets(new_cont_id, wmap, app);
+            self.children.m[id].add_or_show_widgets(new_cont_id, app);
         });
         let guard = wmap[&container_id.0].get(&container_id.1);
         let cont = guard.to_container();
@@ -217,7 +219,7 @@ impl Component {
         }
     }
 
-    pub fn render_diff(&self, comp_old: Option<&Component>, container_id: &WidgetKey, wmap: &WidgetMap, app: &AppPtr)
+    pub fn render_diff(&self, comp_old: Option<&Component>, container_id: &WidgetKey, app: &AppPtr)
     {
         if let Some(comp_old) = comp_old {
             let mut new_cont_id = container_id;
@@ -226,26 +228,26 @@ impl Component {
             }
             println!("Comparing {:?} to {:?}", self.id, comp_old.id);
             if comp_old.id != self.id {
-                comp_old.remove_highest_widgets(container_id, wmap);
+                comp_old.remove_highest_widgets(container_id, app);
             }
             else {
                 comp_old.children.m.iter().for_each(|(id, old_child)| {
                     if let Some(new_child) = self.children.m.get(id) {
-                        new_child.render_diff(Some(old_child), new_cont_id, wmap, app);
+                        new_child.render_diff(Some(old_child), new_cont_id, app);
                     }
                     else {
-                        old_child.remove_highest_widgets(new_cont_id, wmap);
+                        old_child.remove_highest_widgets(new_cont_id, app);
                     }
                 });
                 self.children.m.iter().for_each(|(id, child)| {
                     if !comp_old.children.m.contains_key(id) {
-                        child.add_or_show_widgets(new_cont_id, wmap, app);
+                        child.add_or_show_widgets(new_cont_id, app);
                     }
                 });
             }
         }
         else { //empty previous state
-            self.add_or_show_widgets(container_id, wmap, app);
+            self.add_or_show_widgets(container_id, app);
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::gui::{AppPtr};
 use std::collections::HashMap;
 use EWidget::*;
 
-use gtk::{prelude::*, Widget, Button, Window, Label, Orientation};
+use gtk::{prelude::*, Widget, Button, Container, Window, Label, Orientation};
 
 pub type WidgetMap = HashMap<EWidget, MyWidgetInfo>;
 
@@ -129,5 +129,19 @@ impl WidgetFactory for Factory<gtk::Frame> {
 /*impl WidgetFactory for Factory<gtk::Bin> {
     fn make(&self, info: &WidgetInfo, _: &AppPtr) -> Widget {
 
+    }
+}*/
+
+/*trait FWidgetExt {
+    fn f_add(&self, child_widget: &Widget, parent_info: &WidgetInfo, child_info: &WidgetInfo);
+    fn f_remove(&self, child_widget: &Widget, parent_info: &WidgetInfo, child_info: &WidgetInfo);
+}
+
+impl FWidgetExt for Container {
+    fn f_add(&self, widget: &Widget, _: &WidgetInfo) {
+        self.add(widget);
+    }
+    fn f_remove(&self, widget: &Widget, _: &WidgetInfo) {
+        self.remove(widget);
     }
 }*/

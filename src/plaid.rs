@@ -237,6 +237,17 @@ pub fn get_access_token() -> impl Future<Item=Value, Error=String> {
     }).map_err(|e| e.to_string())
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct Balance {
+    available: i32,
+    current: i32,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Account {
+    name: String,
+    balance: Balance
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Transaction {
