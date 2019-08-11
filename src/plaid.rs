@@ -238,7 +238,7 @@ pub fn get_access_token() -> impl Future<Item=Value, Error=String> {
 }
 
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Transaction {
     pub transaction_id: String,
     pub account_id: String,

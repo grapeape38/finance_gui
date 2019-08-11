@@ -2,6 +2,7 @@ mod gui;
 mod plaid;
 mod datamodel;
 mod component;
+mod ewidget;
 use gui::run_app;
 
 use hyper::rt::{self};

@@ -4,19 +4,16 @@ extern crate gtk;
 extern crate hyper;
 use crate::gui::{AppPtr};
 use crate::datamodel::{CallbackFn};
+use crate::ewidget::*;
 
-use gtk::{prelude::*, Widget, Container, Button, Window, Label, Orientation};
-use std::iter::FromIterator;
+use gtk::{prelude::*, Widget, Container};
 use std::ops::{Deref};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::marker::PhantomData;
 
 use std::collections::{HashMap};
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
 
-fn call<T: gtk::Cast + gtk::IsA<Widget>>(cb: &Rc<CallbackFn>, app: &AppPtr) -> Box<Fn(&T) + 'static>
+pub fn widget_call<T: gtk::Cast + gtk::IsA<Widget>>(cb: &Rc<CallbackFn>, app: &AppPtr) -> Box<Fn(&T) + 'static>
 {
     let app_2 = Rc::clone(app);
     let cb_2 = Rc::clone(cb);
@@ -29,7 +26,7 @@ fn call<T: gtk::Cast + gtk::IsA<Widget>>(cb: &Rc<CallbackFn>, app: &AppPtr) -> B
 }
 
 pub struct MyWidgetInfo {
-    wmap: RefCell<HashMap<u64, Widget>>,
+    wmap: RefCell<HashMap<String, Widget>>,
     factory: Box<dyn WidgetFactory> 
 }
 
@@ -40,8 +37,8 @@ impl MyWidgetInfo {
             factory
         }
     }
-    fn get_or_make(&self, id: u64, info: &WidgetInfo, app: &AppPtr) -> WidgetGuard {
-        let widget = match self.wmap.borrow_mut().remove(&id) {
+    fn get_or_make<'a>(&'a self, id: &'a str, info: &WidgetInfo, app: &AppPtr) -> WidgetGuard {
+        let widget = match self.wmap.borrow_mut().remove(id) {
                 Some(w) => Some(w),
                 None => {
                     Some(self.factory.make(info, app))
@@ -49,10 +46,10 @@ impl MyWidgetInfo {
         };
         WidgetGuard { widget_info: self, widget, id}
     }
-    fn get(&self, id: u64) -> WidgetGuard {
-        WidgetGuard{ widget_info: self, widget: self.wmap.borrow_mut().remove(&id), id}
+    fn get<'a>(&'a self, id: &'a str) -> WidgetGuard {
+        WidgetGuard{ widget_info: self, widget: self.wmap.borrow_mut().remove(id), id}
     }
-    pub fn set(&mut self, w: Widget, id: u64) {
+    pub fn set(&mut self, w: Widget, id: String) {
         self.wmap.borrow_mut().insert(id, w);
     }
 }
@@ -60,12 +57,12 @@ impl MyWidgetInfo {
 struct WidgetGuard<'a> {
     widget_info: &'a MyWidgetInfo,
     widget: Option<Widget>,
-    id: u64
+    id: &'a str 
 }
 
 impl<'a> Drop for WidgetGuard<'a> {
     fn drop(&mut self) {
-        self.widget_info.wmap.borrow_mut().insert(self.id, self.widget.take().unwrap());
+        self.widget_info.wmap.borrow_mut().insert(self.id.to_string(), self.widget.take().unwrap());
     }
 }
 
@@ -83,38 +80,15 @@ impl <'a> Deref for WidgetGuard<'a> {
 }
 
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
-pub enum EWidget {
-    SignInButton,
-    LoadingFrame,
-    ErrorPage,
-    SignInLabel,
-    GetTransButton,
-    SignedInFrame, 
-    MainBox,
-    MainWindow,
-    TransColLabel,
-    TransColBin,
-    TransRow,
-    TransBox
+pub enum ComponentID {
+    WidgetID(WidgetKey),
+    NodeID(&'static str)
 }
 
-pub type WidgetKey = (EWidget, u64);
 
-impl From<EWidget> for WidgetKey {
-    fn from(id: EWidget) -> Self {
-        (id, 0 as u64)
-    }
-}
-
-pub fn to_key<H: Hash>(w: EWidget, h: H) -> WidgetKey {
-    let mut hasher = DefaultHasher::new();
-    h.hash(&mut hasher);
-    (w, hasher.finish())
-}
-
-impl From<EWidget> for ComponentID {
-    fn from(id: EWidget) -> Self {
-        ComponentID::WidgetID((id, 0 as u64))
+impl<K: ToKey> From<K> for ComponentID {
+    fn from(k: K) -> Self {
+        ComponentID::WidgetID(k.to_key())
     }
 }
 
@@ -124,81 +98,9 @@ impl From<&'static str> for ComponentID {
     }
 }
 
-impl From<WidgetKey> for ComponentID {
-    fn from(k: WidgetKey) -> Self {
-        ComponentID::WidgetID(k)
-    }
-}
-
-pub trait WidgetFactory {
-    fn make(&self, info: &WidgetInfo, app: &AppPtr) -> Widget;
-}
-
-pub struct Factory<W: WidgetExt> {
-    phantom: PhantomData<W> 
-}
-
-impl<W: WidgetExt> Factory<W> {
-    pub fn new() -> Self { Factory { phantom: PhantomData } }
-}
-
-impl WidgetFactory for Factory<Button> {
-    fn make(&self, info: &WidgetInfo, app: &AppPtr) -> Widget {
-        let button = match info.attributes.get("label") {
-            Some(label) => Button::new_with_label(label),
-            None => Button::new()
-        };
-        if let Some(callback) = info.callbacks.get("clicked") {
-            button.connect_clicked(call(callback, app));
-        }
-        button.upcast::<Widget>()
-    }
-}
-
-impl WidgetFactory for Factory<Label> {
-    fn make(&self, info: &WidgetInfo, _: &AppPtr) -> Widget {
-        gtk::Label::new(info.attributes.get("text").map(|s| &s[..])).upcast::<Widget>()
-    }
-}
-
-impl WidgetFactory for Factory<Window> {
-    fn make(&self, _: &WidgetInfo, _: &AppPtr) -> Widget {
-        Window::new(gtk::WindowType::Toplevel).upcast::<Widget>()
-    }
-}
-
-impl WidgetFactory for Factory<gtk::Box> {
-    fn make(&self, info: &WidgetInfo, _: &AppPtr) -> Widget {
-        let orientation = info.attributes.get("orientation")
-            .map(|s| if s == "vertical" { Orientation::Vertical } else { Orientation::Horizontal })
-            .unwrap_or(Orientation::Vertical);
-        let spacing = info.attributes.get("spacing")
-            .map(|s| s.parse::<i32>().unwrap_or(10)).unwrap_or(10);
-        gtk::Box::new(orientation, spacing).upcast::<Widget>()
-    }
-}
-
-impl WidgetFactory for Factory<gtk::Frame> {
-    fn make(&self, info: &WidgetInfo, _: &AppPtr) -> Widget {
-        gtk::Frame::new(info.attributes.get("label").map(|s| &s[..])).upcast::<Widget>()
-    }
-}
-
-/*impl WidgetFactory for Factory<gtk::Bin> {
-    fn make(&self, info: &WidgetInfo, _: &AppPtr) -> Widget {
-
-    }
-}*/
-
-#[derive(Hash, PartialEq, Eq, Clone, Debug)]
-pub enum ComponentID {
-    WidgetID(WidgetKey),
-    NodeID(&'static str)
-}
-
 pub struct WidgetInfo {
-    attributes: HashMap<&'static str, String>,
-    callbacks: HashMap<&'static str, Rc<CallbackFn>>,
+    pub attributes: HashMap<&'static str, String>,
+    pub callbacks: HashMap<&'static str, Rc<CallbackFn>>,
 }
 
 impl WidgetInfo {
@@ -221,10 +123,19 @@ impl WidgetInfo {
 pub struct Component {
     widget: Option<WidgetInfo>,
     id: ComponentID,
-    children: HashMap<ComponentID, Component>
+    children: Children 
 }
 
-pub type WidgetMap = HashMap<EWidget, MyWidgetInfo>;
+struct Children {
+    m: HashMap<ComponentID, Component>,
+    v: Vec<ComponentID>
+}
+
+impl Children {
+    fn new() -> Self {
+        Children { m: HashMap::new(), v: Vec::new() }
+    }
+}
 
 fn add_child_maybe(widget: &Widget, container: &Container) {
     if container.upcast_ref::<Widget>() != widget.get_parent().as_ref().unwrap_or(widget) {
@@ -256,13 +167,15 @@ impl Component {
     fn remove_highest_widgets(&self, container_id: &WidgetKey, wmap: &WidgetMap) {
         if let ComponentID::WidgetID(ref id) = self.id {
             if container_id != id {
-                let parent = wmap[&container_id.0].get(container_id.1);
-                let child = wmap[&id.0].get(id.1);
+                let parent = wmap[&container_id.0].get(&container_id.1);
+                let child = wmap[&id.0].get(&id.1);
+                println!("Removing child {:?} from container {:?}", id, container_id);
                 remove_child_maybe(&(*child), parent.to_container());
             }
         }
         else {
-            self.children.iter().for_each(|(_, child)| {
+            self.children.m.iter().for_each(|(id, child)| {
+                println!("Removing child {:?} from container {:?}", id, container_id);
                 child.remove_highest_widgets(container_id, wmap);
             });
         }
@@ -270,10 +183,10 @@ impl Component {
 
     fn hide_highest_widgets(&self, wmap: &WidgetMap) {
         if let ComponentID::WidgetID(ref id) = self.id {
-            wmap[&id.0].get(id.1).hide();
+            wmap[&id.0].get(&id.1).hide();
         }
         else {
-            self.children.iter().for_each(|(_, child)| {
+            self.children.m.iter().for_each(|(_, child)| {
                 child.hide_highest_widgets(wmap);
             });
         }
@@ -287,20 +200,17 @@ impl Component {
                 new_cont_id = id;
                 println!("Adding child {:?} to container {:?}", id, container_id);
                 if let Some(ref info) = self.widget {
-                    let gtk_widget = wmap[&id.0].get_or_make(id.1, info, app);
-                    let parent_guard = wmap[&container_id.0].get(container_id.1);
+                    let gtk_widget = wmap[&id.0].get_or_make(&id.1, info, app);
+                    let parent_guard = wmap[&container_id.0].get(&container_id.1);
                     add_child_maybe(&(*gtk_widget), parent_guard.to_container());
                     gtk_widget.show();
                 }
             }
         }
-        let mut i = 0;
-        self.children.iter().for_each(|(_, child)| {
-            i+=1;
-            println!("Child: {}", i);
-            child.add_or_show_widgets(new_cont_id, wmap, app);
+        self.children.v.iter().for_each(|id| {
+            self.children.m[id].add_or_show_widgets(new_cont_id, wmap, app);
         });
-        let guard = wmap[&container_id.0].get(container_id.1);
+        let guard = wmap[&container_id.0].get(&container_id.1);
         let cont = guard.to_container();
         if !cont.is_visible() {
             cont.show();
@@ -319,16 +229,16 @@ impl Component {
                 comp_old.remove_highest_widgets(container_id, wmap);
             }
             else {
-                comp_old.children.iter().for_each(|(id, old_child)| {
-                    if let Some(new_child) = self.children.get(id) {
+                comp_old.children.m.iter().for_each(|(id, old_child)| {
+                    if let Some(new_child) = self.children.m.get(id) {
                         new_child.render_diff(Some(old_child), new_cont_id, wmap, app);
                     }
                     else {
                         old_child.remove_highest_widgets(new_cont_id, wmap);
                     }
                 });
-                self.children.iter().for_each(|(id, child)| {
-                    if !comp_old.children.contains_key(id) {
+                self.children.m.iter().for_each(|(id, child)| {
+                    if !comp_old.children.m.contains_key(id) {
                         child.add_or_show_widgets(new_cont_id, wmap, app);
                     }
                 });
@@ -340,21 +250,22 @@ impl Component {
     }
 }
 
-pub fn new_leaf<K: Into<WidgetKey>>(id: K) -> Component {
+pub fn new_leaf<K: ToKey>(id: K) -> Component {
     Component {
         widget: Some(WidgetInfo::new()),
-        children: HashMap::new(),
-        id: ComponentID::WidgetID(id.into())
+        children: Children::new(),
+        id: ComponentID::WidgetID(id.to_key())
     }
 }
 
 pub fn new_node<K: Into<ComponentID> + Clone>(v: Vec<Component>, id: K) -> Component
 {
-    let children = HashMap::from_iter(
-        v.into_iter().map(|c| {
-            (c.id.clone(), c)
-        })
-    );
+    let mut children = Children::new();
+    v.into_iter().for_each(|comp| {
+        let id = comp.id.clone();
+        children.m.insert(comp.id.clone(), comp);
+        children.v.push(id)
+    });
     let widget = match id.clone().into() {
         ComponentID::WidgetID(_) => Some(WidgetInfo::new()),
         ComponentID::NodeID(_) => None

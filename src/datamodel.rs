@@ -8,7 +8,6 @@ use crate::gui;
 use hyper::rt::{self, Future, Stream};
 
 use gui::{AppPtr, build_ui};
-use gio::prelude::*;
 use gtk::prelude::*;
 use serde_json::{Value};
 use std::rc::Rc;
@@ -75,17 +74,19 @@ pub fn poll_response<G>(app: AppPtr, handle_response_fn: Rc<G>) -> Continue
 }
 
 pub struct DataModel { 
+    pub auth_params: AuthParams,
     pub signed_in: ReqStatus<bool>,
     pub transactions: ReqStatus<Vec<Transaction>>,
-    pub auth_params: AuthParams,
+    pub balance: ReqStatus<f32>,
 }
 
 impl DataModel {
     pub fn new() -> DataModel {
         DataModel {
-            signed_in: Ok(RespType::Done(false)),
             auth_params: AuthParams::new().unwrap(),
+            signed_in: Ok(RespType::None),
             transactions: Ok(RespType::None),
+            balance: Ok(RespType::None)
         }
     }
 }
