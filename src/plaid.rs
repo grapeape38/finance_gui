@@ -8,7 +8,7 @@ use hyper::rt::{Future, Stream};
 use hyper_tls::HttpsConnector;
 use std::{env};
 use std::error::Error;
-use serde::{Serialize};
+use serde::{Serialize, Deserialize};
 use serde_json::{json, Value, Map};
 
 const LINK_VERSION: &'static str = "2.0.264";
@@ -215,7 +215,7 @@ impl ClientHandle {
         let url = "https://sandbox.plaid.com/transactions/get";
         let json = json!({
             "start_date": "2019-07-01",
-            "end_date": "2019-07-14",
+            "end_date": "2019-08-10",
             "options": Map::new()
         });
         self.api_call(url, json)
@@ -235,4 +235,15 @@ pub fn get_access_token() -> impl Future<Item=Value, Error=String> {
     }).and_then(|ch| {
         ch.exchange_public_token()
     }).map_err(|e| e.to_string())
+}
+
+
+#[derive(Deserialize, Debug)]
+pub struct Transaction {
+    pub transaction_id: String,
+    pub account_id: String,
+    pub transaction_type: String,
+    pub name: String,
+    pub amount: f32,
+    pub date: String
 }

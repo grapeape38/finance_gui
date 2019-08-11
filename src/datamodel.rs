@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use plaid::*;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RespType<T> {
     None,
     InProgress,
@@ -60,7 +60,7 @@ pub fn poll_response<G>(app: AppPtr, handle_response_fn: Rc<G>) -> Continue
                 println!("Not finished!");
             }
             Ok(RespType::Done(ref json)) => {
-                println!("Got response!");
+                println!("Got response! {:?}", json);
                 handle_response_fn(Ok(json.clone()), Rc::clone(&app));
                 return Continue(false);
             }
@@ -75,8 +75,8 @@ pub fn poll_response<G>(app: AppPtr, handle_response_fn: Rc<G>) -> Continue
 }
 
 pub struct DataModel { 
-    pub signed_in: Result<RespType<bool>, String>,
-    pub transactions: Option<Value>,
+    pub signed_in: ReqStatus<bool>,
+    pub transactions: ReqStatus<Vec<Transaction>>,
     pub auth_params: AuthParams,
 }
 
@@ -85,7 +85,7 @@ impl DataModel {
         DataModel {
             signed_in: Ok(RespType::Done(false)),
             auth_params: AuthParams::new().unwrap(),
-            transactions: None,
+            transactions: Ok(RespType::None),
         }
     }
 }
@@ -119,6 +119,25 @@ pub fn sign_in_cb() -> Rc<CallbackFn> {
                 data.signed_in = json.as_ref().map(|_| RespType::Done(true)).map_err(|e| e.clone());
                 data.auth_params.access_token = json.as_ref().ok().map(|json| json["access_token"].as_str().expect("failed to get public token").to_string());
                 data.auth_params.item_id = json.ok().map(|json| json["item_id"].as_str().expect("failed to get item id").to_string());
+            }
+            build_ui(Rc::clone(&app2));
+        }));
+        build_ui(Rc::clone(&app));
+    })
+}
+
+pub fn get_trans_cb() -> Rc<CallbackFn> {
+    Rc::new(|app: AppPtr| {
+        app.data.borrow_mut().transactions = Ok(RespType::InProgress);
+        let mut ch = ClientHandle::new().unwrap();
+        ch.auth_params = app.data.borrow().auth_params.clone();
+        make_call_async(ch.get_transactions(), &app, Rc::new(|json: Result<Value, String>, app2: AppPtr| {
+            {
+                let mut data = app2.data.borrow_mut();
+                data.transactions = json.map(|mut trans_json|  {
+                    let trans_obj = trans_json.get_mut("transactions").expect("no transactions in response").take();
+                    RespType::Done(serde_json::from_value(trans_obj).expect("error deserializing transactions"))
+                    }).map_err(|e| e.clone());
             }
             build_ui(Rc::clone(&app2));
         }));

@@ -4,9 +4,11 @@ extern crate gtk;
 extern crate hyper;
 use crate::datamodel;
 use crate::component;
+use crate::plaid;
 
 use datamodel::*;
 use component::*;
+use plaid::Transaction;
 use component::ComponentID::*;
 
 use gio::prelude::*;
@@ -61,7 +63,7 @@ impl AppState {
         window.set_default_size(350, 70);
 
         let mut widgets = create_widgets();
-        widgets.get_mut(&MainWindow).unwrap().set(window.upcast::<Widget>());
+        widgets.get_mut(&MainWindow).unwrap().set(window.upcast::<Widget>(), 0);
         let app_state = AppState {
             data: RefCell::new(DataModel::new()),
             async_request: Arc::new(Mutex::new(Ok(RespType::None))),
@@ -72,16 +74,48 @@ impl AppState {
     }
 }
 
-fn create_widgets() -> HashMap<EWidget, MyWidgetInfo> {
+fn create_widgets() -> WidgetMap {
     c_map!(
         SignInButton => Button,
-        SignInLoading => gtk::Frame,
+        LoadingFrame => gtk::Frame,
         SignedInFrame => gtk::Frame,
         ErrorPage => gtk::Frame,
         GetTransButton => Button,
         MainWindow => Window,
-        MainBox => gtk::Box
+        MainBox => gtk::Box,
+        TransColLabel => gtk::Label,
+        TransColBin => gtk::Frame,
+        TransRow => gtk::Box,
+        TransBox => gtk::Box
     )
+}
+
+fn trans_row(trans: &Transaction) -> Component {
+    let amt = format!("{}", trans.amount);
+    let entries = vec![
+        &trans.account_id,
+        &amt,
+        &trans.date,
+        &trans.name,
+        &trans.transaction_id,
+        &trans.transaction_type
+    ];
+    let mut i = 0;
+    let rowvec = entries.into_iter().map(|entry| {
+        let mut key = to_key(TransColLabel, format!("{}-{}", trans.transaction_id, i));
+        let label = new_leaf(key).with_attributes(map!("text" => entry.clone()));
+        i += 1;
+        key = to_key(TransColBin, format!("{}-{}-bin", trans.transaction_id, i));
+        new_node(vec![label], key)
+    }).collect();
+    new_node(rowvec, to_key(TransRow, &trans.transaction_id)).with_attributes(map!("orientation" => "horizontal".to_string()))
+}
+
+fn trans_box(transactions: &Vec<Transaction>) -> Component {
+    let rows = transactions.iter().map(|t| {
+        trans_row(t)
+    }).collect();
+    new_node(rows, TransBox)
 }
 
 fn sign_in_page(_: &AppPtr) -> Component {
@@ -91,14 +125,29 @@ fn sign_in_page(_: &AppPtr) -> Component {
 }
 
 fn user_page(state: &AppPtr) -> Component {
+    let mut v = Vec::new();
     let label_text = format!("You are signed in! Your access token is: {}", state.data.borrow().auth_params.access_token.as_ref().unwrap());
     let label = new_leaf(SignedInFrame)
         .with_attributes(map!("label" => label_text));
-    let button = new_leaf(GetTransButton)
-        .with_attributes(map!("label" => "Get transactions".to_string()));
-        //.with_callback("clicked", get_transactions_cb());
-    let v = vec![label, button];
-    new_node(v, NodeID("user_page"))
+    v.push(label);
+    match state.data.borrow().transactions {
+        Ok(RespType::InProgress) => {
+            v.push(new_leaf(to_key(LoadingFrame, "trans loading")).with_attributes(map!("label" => "Getting Transactions...".to_string())));
+        }
+        Ok(RespType::Done(ref transactions)) => {
+            v.push(trans_box(transactions));
+        }
+        Err(ref e) => {
+            v.push(new_leaf(to_key(ErrorPage, "trans error")).with_attributes(map!("label" => e.to_string())));
+        }
+        _ => {
+            let button = new_leaf(GetTransButton)
+                .with_attributes(map!("label" => "Get transactions".to_string()))
+                .with_callback("clicked", get_trans_cb());
+            v.push(button);
+        }
+    };
+    new_node(v, "user_page")
 }
 
 fn main_app(state: &AppPtr) -> Component {
@@ -106,25 +155,25 @@ fn main_app(state: &AppPtr) -> Component {
     let signed_in = state.data.borrow().signed_in.clone();
     match signed_in {
         Ok(RespType::InProgress) => {
-            v.push(new_leaf(SignInLoading).with_attributes(map!("label" => "Signing in...".to_string())));
+            v.push(new_leaf(to_key(LoadingFrame, "sign in loading")).with_attributes(map!("label" => "Signing in...".to_string())));
         },
         Ok(RespType::Done(true)) => {
             v.push(user_page(state));
         }
         Err(e) => {
-            v.push(new_leaf(ErrorPage).with_attributes(map!("label" => e)));
+            v.push(new_leaf(to_key(ErrorPage, "sign in error")).with_attributes(map!("label" => e)));
         }
         _ => { v.push(sign_in_page(state)); }
     }
-    new_node(v, WidgetID(MainBox))
+    new_node(v, MainBox)
 }
 
 pub fn build_ui(state: AppPtr) {
     let v = vec![main_app(&state)];
-    let app_tree = new_node(v, WidgetID(MainWindow));
+    let app_tree = new_node(v, MainWindow);
     app_tree.render_diff(
         state.ui_tree.borrow().as_ref(),
-        &MainWindow,
+        &(MainWindow, 0),
         &state.widgets,
         &state);
     *state.ui_tree.borrow_mut() = Some(app_tree);
