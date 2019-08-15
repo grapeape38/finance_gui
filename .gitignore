@@ -1,2 +1,4 @@
 /target
 **/*.rs.bk
+setenv.sh
+.vscode
