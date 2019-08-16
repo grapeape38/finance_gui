@@ -35,7 +35,10 @@ pub enum EWidget {
     TransColLabel,
     TransColBin,
     TransRow,
-    TransBox
+    TransBox,
+    LabelFrame,
+    AccountBox,
+    SomeLabel
 }
 
 pub fn create_widgets() -> WidgetMap {
@@ -50,7 +53,10 @@ pub fn create_widgets() -> WidgetMap {
         TransColLabel => gtk::Label,
         TransColBin => gtk::Frame,
         TransRow => gtk::Box,
-        TransBox => gtk::Box
+        TransBox => gtk::Box,
+        LabelFrame => gtk::Frame,
+        AccountBox => gtk::Box,
+        SomeLabel => Label
     )
 }
 

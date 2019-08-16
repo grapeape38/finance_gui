@@ -150,6 +150,13 @@ fn remove_child_maybe(child: &Widget, container: &Container) {
 }
 
 impl Component {
+    pub fn empty(id: &'static str) -> Component {
+        Component {
+            widget: None,
+            id: id.into(),
+            children: Children::new()
+        }
+    }
     pub fn with_attributes(self, attributes: HashMap<&'static str, String>) -> Self {
         Component {
             widget: self.widget.map(|w| w.with_attributes(attributes)),
@@ -278,4 +285,5 @@ pub fn new_node<K: Into<ComponentID> + Clone>(v: Vec<Component>, id: K) -> Compo
         children
     }
 }
+
 

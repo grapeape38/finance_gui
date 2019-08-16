@@ -1,7 +1,7 @@
 extern crate hyper;
 extern crate rand;
 use rand::{Rng};
-use hyper::{Client, Method, Body, Request};
+use hyper::{Client, Method, Body, Request, StatusCode};
 use hyper::client::{HttpConnector};
 use hyper::header::{HeaderValue, HeaderMap};
 use hyper::rt::{Future, Stream};
@@ -10,6 +10,7 @@ use std::{env};
 use std::error::Error;
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value, Map};
+use std::str::from_utf8;
 
 const LINK_VERSION: &'static str = "2.0.264";
 //pub const API_VERSION: &'static str = "2019-05-29";
@@ -156,11 +157,18 @@ impl ClientHandle {
         *req.uri_mut() = uri.clone();
         *req.headers_mut() = self.headers.clone();
         self.client.request(req).and_then(|res| {
-                println!("Response: {}", res.status());
-                res.into_body().concat2()
-            }).map_err(|e| e.to_string()).and_then(|body| {
-                let resp_json: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-                Ok(resp_json)
+                let status = res.status().clone();
+                println!("Response: {}", status);
+                res.into_body().concat2().and_then(move |body| Ok((status, body)))
+            }).map_err(|e| e.to_string()).and_then(|(status, body)| {
+                match status {
+                    StatusCode::OK => {
+                        let resp_json: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+                        Ok(resp_json)
+                    }
+                    _ => Err(from_utf8(&body).map(|s| s.to_string())
+                            .unwrap_or(format!("Bad status code: {}", status)))
+                }
             })
     }
     
@@ -169,7 +177,7 @@ impl ClientHandle {
         println!("Getting session id, json: {}", json);
         let url = "https://sandbox.plaid.com/link/client/get";
         self.post_json(&json, url).and_then(|resp_json| {
-            self.params.link_session_id = Some(resp_json["link_session_id"].as_str().expect("failed to get session id").to_string());
+            self.params.link_session_id = Some(resp_json["link_session_id"].as_str().ok_or("failed to get session id")?.to_string());
             Ok(self)
         })
     }
@@ -187,7 +195,7 @@ impl ClientHandle {
         println!("Getting public token, json: {}", json);
         let url = "https://sandbox.plaid.com/link/item/create";
         self.post_json(&json, url).and_then(|resp_json| {
-            self.params.public_token = Some(resp_json["public_token"].as_str().expect("failed to get public token").to_string());
+            self.params.public_token =  Some(resp_json["public_token"].as_str().ok_or("error parsing public token")?.to_string());
             Ok(self)
         })
     }
@@ -236,21 +244,27 @@ pub fn get_access_token() -> impl Future<Item=(ClientHandle, Value), Error=Strin
         ch.exchange_public_token()
     }).and_then(|(mut ch, json)| {
         ch.auth_params.access_token = Some(json["access_token"].as_str().ok_or("error parsing access token")?.to_string());
-        ch.auth_params.access_token = Some(json["item_id"].as_str().ok_or("error parsing item id")?.to_string());
+        ch.auth_params.item_id = Some(json["item_id"].as_str().ok_or("error parsing item id")?.to_string());
         Ok((ch, json))
-    }).map_err(|e| e.to_string())
+    })
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Balance {
-    available: i32,
-    current: i32,
+    pub available: Option<f32>,
+    pub current: f32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Account {
-    name: String,
-    balance: Balance
+    pub account_id: String,
+    pub name: String,
+    pub balances: Balance
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Accounts {
+    pub accounts: Vec<Account>
 }
 
 #[derive(Deserialize, Debug, Clone)]
