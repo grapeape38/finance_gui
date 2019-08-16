@@ -46,13 +46,13 @@ pub struct Params {
     public_token: Option<String>
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AuthParams {
     pub access_token: Option<String>,
     #[serde(skip_serializing)]
     pub item_id: Option<String>,
-    secret: String,
-    client_id: String,
+    secret: Option<String>,
+    client_id: Option<String>,
 }
 
 fn gen_random_id() -> String {
@@ -95,8 +95,8 @@ impl AuthParams {
         Ok(AuthParams {
             access_token: None,
             item_id: None,
-            secret: secret,
-            client_id: client_id
+            secret: Some(secret),
+            client_id: Some(client_id),
         })
     }
     fn add_json(&self, json_v: &Value) -> String {
@@ -193,7 +193,7 @@ impl ClientHandle {
     }
 
     
-    pub fn exchange_public_token(&self) -> impl Future<Item=Value, Error=String> {
+    pub fn exchange_public_token(self) -> impl Future<Item=(ClientHandle, Value), Error=String> {
         let url = "https://sandbox.plaid.com/item/public_token/exchange";
         let json = json!({
             "public_token": self.params.public_token.clone().unwrap(),
@@ -202,7 +202,7 @@ impl ClientHandle {
         });
         let json_str = serde_json::to_string_pretty(&json).expect("pub token json err");
         println!("Getting access token, json: {}", json_str);
-        self.post_json(&json_str, url)
+        self.post_json(&json_str, url).and_then(|json| Ok((self, json)))
     }
 
     
@@ -227,13 +227,17 @@ impl ClientHandle {
     }
 }
 
-pub fn get_access_token() -> impl Future<Item=Value, Error=String> {
+pub fn get_access_token() -> impl Future<Item=(ClientHandle, Value), Error=String> {
     let ch = ClientHandle::new().unwrap();
     ch.get_session_id()
         .and_then(|ch| {
         ch.get_public_token()
     }).and_then(|ch| {
         ch.exchange_public_token()
+    }).and_then(|(mut ch, json)| {
+        ch.auth_params.access_token = Some(json["access_token"].as_str().ok_or("error parsing access token")?.to_string());
+        ch.auth_params.access_token = Some(json["item_id"].as_str().ok_or("error parsing item id")?.to_string());
+        Ok((ch, json))
     }).map_err(|e| e.to_string())
 }
 
@@ -257,4 +261,9 @@ pub struct Transaction {
     pub name: String,
     pub amount: f32,
     pub date: String
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Transactions {
+    pub transactions: Vec<Transaction>
 }

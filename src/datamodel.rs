@@ -13,8 +13,10 @@ use serde_json::{Value};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use plaid::*;
+use EventType::*;
+use std::collections::HashMap;
 
-#[derive(Clone, Debug)]
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub enum RespType<T> {
     None,
     InProgress,
@@ -22,6 +24,98 @@ pub enum RespType<T> {
 }
 
 pub type ReqStatus<T> = Result<RespType<T>, String>;
+
+pub type EventPtr = Arc<Mutex<HashMap<EventType, ReqStatus<Value>>>>;
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Hash)]
+pub enum EventType {
+    SignIn,
+    GetTrans,
+    GetBal
+}
+
+impl<T> From<T> for RespType<T> {
+    fn from(val: T) -> Self {
+        RespType::Done(val)
+    }
+}
+
+fn add_and_poll_events(events: &Vec<EventType>, app: &AppPtr) -> bool {
+    if let Ok(ref mut emap) = app.event_map.lock() {
+        if events.iter().any(|e| emap[e] == Ok(RespType::InProgress)) {
+            return false;
+        }
+        events.iter().for_each(|e| {
+            emap.insert(e.clone(), Ok(RespType::InProgress));
+        });
+        let app_2 = Rc::clone(&app);
+        timeout_add_seconds(1, move || {
+            poll_events(Rc::clone(&app_2))
+        });
+        return true;
+    }
+    false
+}
+
+fn poll_events(app: AppPtr) -> Continue {
+    let mut cont = false;
+    let mut rebuild = false;
+    if let Ok(ref emap) = app.event_map.lock() {
+        let mut finished: Vec<(EventType, Result<Value, String>)> = Vec::new();
+        emap.iter().for_each(|(et,rs)| {
+            match rs {
+                Ok(RespType::None) | Ok(RespType::InProgress) => {
+                    println!("Not finished!");
+                    cont = true;
+                },
+                Ok(RespType::Done(ref v)) => {
+                    println!("Got response! {:?}", v);
+                    finished.push((*et, Ok(v.clone())));
+                },
+                Err(ref e) => {
+                    println!("Error with request: {}", e);
+                    finished.push((*et, Err(e.clone())));
+                }
+            }
+        });
+        rebuild = finished.len() > 0;
+        finished.into_iter().for_each(|(et, rs)| {
+            handle_event(et, rs, &app);
+        });
+    }
+    if rebuild {
+        build_ui(app);
+    }
+    Continue(cont)
+}
+
+fn handle_event(event: EventType, jres: Result<Value, String>, app: &AppPtr) {
+    let mut data = app.data.borrow_mut();
+    match event {
+        EventType::SignIn => {
+            let auth_params: Result<AuthParams, String> = jres.and_then(|json| 
+                serde_json::from_value(json.clone()).map_err(|_| "error deserializing auth params".to_string()));
+            match auth_params {
+                Ok(auth) => {
+                    data.signed_in = Ok(RespType::Done(true));
+                    data.auth_params.access_token = auth.access_token;
+                    data.auth_params.item_id = auth.item_id;
+                }
+                Err(e) => { data.signed_in = Err(e); }
+            };
+        },
+        EventType::GetTrans => {
+             data.transactions = jres.and_then(|trans_json|  {
+                serde_json::from_value(trans_json.clone()).map_err(|_| "error deserializing transactions".to_string())
+             }).map(|trans_obj: Transactions| {
+                trans_obj.into()
+             });
+        },
+        EventType::GetBal => {
+
+        }
+    }
+}
 
 pub fn make_call_async<F, G>(call: F, app: &AppPtr, handle_response_fn: Rc<G>) 
     where F: Future<Item=Value, Error=String> + Send + 'static, G: Fn(Result<Value, String>, AppPtr) + 'static
@@ -76,7 +170,7 @@ pub fn poll_response<G>(app: AppPtr, handle_response_fn: Rc<G>) -> Continue
 pub struct DataModel { 
     pub auth_params: AuthParams,
     pub signed_in: ReqStatus<bool>,
-    pub transactions: ReqStatus<Vec<Transaction>>,
+    pub transactions: ReqStatus<Transactions>,
     pub balance: ReqStatus<f32>,
 }
 
@@ -113,16 +207,23 @@ pub type CallbackFn = Fn(AppPtr);
 
 pub fn sign_in_cb() -> Rc<CallbackFn> {
     Rc::new(|app: AppPtr| {
-        app.data.borrow_mut().signed_in = Ok(RespType::InProgress);
-        make_call_async(get_access_token(), &app, Rc::new(|json: Result<Value, String>, app2: AppPtr| {
-            {
-                let mut data = app2.data.borrow_mut();
-                data.signed_in = json.as_ref().map(|_| RespType::Done(true)).map_err(|e| e.clone());
-                data.auth_params.access_token = json.as_ref().ok().map(|json| json["access_token"].as_str().expect("failed to get public token").to_string());
-                data.auth_params.item_id = json.ok().map(|json| json["item_id"].as_str().expect("failed to get item id").to_string());
-            }
-            build_ui(Rc::clone(&app2));
-        }));
+        add_and_poll_events(&vec![SignIn, GetBal, GetTrans], &app);
+        let event_map = Arc::clone(&app.event_map);
+        let emap2 = Arc::clone(&app.event_map);
+        rt::spawn(get_access_token().then(move |res| {
+                event_map.modify(|emap| {
+                    emap.insert(SignIn, res.as_ref().map(|(_, json)| json.clone().into()).map_err(|e| e.to_string()));
+                });
+                res.map(|(ch, _)| ch)
+            }).and_then(|ch| {
+                ch.get_transactions()
+            }).then(move |res| {
+                emap2.modify(|emap| {
+                    emap.insert(GetTrans, res.map(|json| json.into()));
+                });
+                Ok(())
+            })
+        );
         build_ui(Rc::clone(&app));
     })
 }

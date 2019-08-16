@@ -5,7 +5,7 @@ extern crate hyper;
 
 use crate::datamodel::*;
 use crate::component::*;
-use crate::plaid::Transaction;
+use crate::plaid::{Transaction, Transactions};
 use crate::ewidget::{*, EWidget::*};
 
 use gio::prelude::*;
@@ -32,6 +32,7 @@ macro_rules! map(
 pub struct AppState {
     pub data: RefCell<DataModel>,
     pub async_request: Arc<Mutex<ReqStatus<Value>>>,
+    pub event_map: EventPtr,
     ui_tree: RefCell<Option<Component>>,
     pub widgets: WidgetMap
 }
@@ -51,6 +52,7 @@ impl AppState {
         let app_state = AppState {
             data: RefCell::new(DataModel::new()),
             async_request: Arc::new(Mutex::new(Ok(RespType::None))),
+            event_map: Arc::new(Mutex::new(HashMap::new())),
             ui_tree: RefCell::new(None),
             widgets
         };
@@ -91,8 +93,8 @@ fn trans_row(trans: &Transaction) -> Component {
     new_node(rowvec, (TransRow, &trans.transaction_id)).with_attributes(map!("orientation" => "horizontal".to_string()))
 }
 
-fn trans_box(transactions: &Vec<Transaction>) -> Component {
-    let rows = transactions.iter().map(|t| {
+fn trans_box(tr: &Transactions) -> Component {
+    let rows = tr.transactions.iter().map(|t| {
         trans_row(t)
     }).collect();
     new_node(rows, TransBox)
@@ -118,7 +120,7 @@ fn user_page(state: &AppPtr) -> Component {
             .with_attributes(map!("label" => "Get transactions".to_string()))
             .with_callback("clicked", get_trans_cb())
     };
-    let tbox = |_: &AppPtr, t: &Vec<Transaction>| {
+    let tbox = |_: &AppPtr, t: &Transactions| {
         trans_box(t)
     };
     v.push(loading_comp(state, transactions, trans_button, tbox, "transactions", "Getting Transactions..."));
