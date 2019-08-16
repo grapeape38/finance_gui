@@ -5,7 +5,7 @@ extern crate hyper;
 
 use crate::datamodel::*;
 use crate::component::*;
-use crate::plaid::{Transaction, Transactions, Account, Accounts};
+use crate::plaid::{AuthParams, Transaction, Transactions, Account, Accounts};
 use crate::ewidget::{*, EWidget::*};
 
 use gio::prelude::*;
@@ -130,9 +130,9 @@ fn sign_in_page() -> Component {
         .with_callback("clicked", get_trans_cb())
 };*/
 
-fn user_page(state: &AppPtr) -> Component {
+fn user_page(state: &AppPtr, auth: &AuthParams) -> Component {
     let mut v = Vec::new();
-    let label_text = format!("You are signed in! Your access token is: {}", state.data.borrow().auth_params.access_token.as_ref()
+    let label_text = format!("You are signed in! Your access token is: {}", auth.access_token.as_ref()
         .unwrap_or(&("".to_string())));
     v.push(label_frame(&label_text, "access token label"));
 
@@ -150,9 +150,9 @@ fn user_page(state: &AppPtr) -> Component {
 }
 
 fn main_app(state: &AppPtr) -> Component {
-    let signed_in = state.data.borrow().signed_in.clone();
+    let signed_in = state.data.borrow().auth_params.clone();
     let spage = |_: &AppPtr| sign_in_page();
-    let upage = |state: &AppPtr, _: &bool| user_page(state);
+    let upage = |state: &AppPtr, auth: &AuthParams| user_page(state, auth);
     let v = vec![loading_comp(state, signed_in, spage, upage, "sign in", "Signing in...")];
     new_node(v, MainBox)
 }

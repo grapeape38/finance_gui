@@ -57,6 +57,17 @@ impl<T> ToState<T> for Result<Value, String> where for<'de> T: Deserialize<'de>
     }
 }
 
+impl<T> ToState<T> for ReqStatus<Value> where for<'de> T: Deserialize<'de> {
+    fn to_state(self) -> ReqStatus<T> {
+        match self {
+            Ok(RespType::Done(done)) => Ok(done).to_state(),
+            Err(e) => Err(e),
+            Ok(RespType::InProgress) => Ok(RespType::InProgress),
+            Ok(RespType::None) => Ok(RespType::None),
+        }
+    }
+}
+
 fn add_and_poll_events(events: &Vec<EventType>, app: &AppPtr) -> bool {
     if let Ok(ref mut emap) = app.event_map.lock() {
         if events.iter().any(|e| emap.get(e) == Some(&Ok(RespType::InProgress))) {
@@ -64,10 +75,10 @@ fn add_and_poll_events(events: &Vec<EventType>, app: &AppPtr) -> bool {
         }
         events.iter().for_each(|e| {
             emap.insert(*e, Ok(RespType::InProgress));
-            app.data.borrow_mut().update_in_progress(*e)
+            app.data.borrow_mut().handle_event(*e, Ok(RespType::InProgress));
         });
         let app_2 = Rc::clone(&app);
-        timeout_add_seconds(1, move || {
+        timeout_add(500, move || {
             poll_events(Rc::clone(&app_2))
         });
         return true;
@@ -99,42 +110,18 @@ fn poll_events(app: AppPtr) -> Continue {
         rebuild = finished.len() > 0;
         finished.into_iter().for_each(|(et, rs)| {
             emap.remove(&et);
-            handle_event(et, rs, &app);
+            app.data.borrow_mut().handle_event(et, rs.map(|rt| rt.into()));
         });
     }
     if rebuild {
+        println!("Rebuilding!");
         build_ui(app);
     }
     Continue(cont)
 }
 
-fn handle_event(event: EventType, jres: Result<Value, String>, app: &AppPtr) {
-    let mut data = app.data.borrow_mut();
-    match event {
-        SignIn => {
-            let auth_params: Result<AuthParams, String> = jres.and_then(|json| 
-                serde_json::from_value(json.clone()).map_err(|e| e.to_string()));
-            match auth_params {
-                Ok(auth) => {
-                    data.signed_in = Ok(RespType::Done(true));
-                    data.auth_params.access_token = auth.access_token;
-                    data.auth_params.item_id = auth.item_id;
-                }
-                Err(e) => { data.signed_in = Err(e); }
-            };
-        },
-        GetTrans => {
-             data.transactions = jres.to_state();
-        },
-        GetBal => {
-             data.accounts = jres.to_state(); 
-        }
-    }
-}
-
 pub struct DataModel { 
-    pub auth_params: AuthParams,
-    pub signed_in: ReqStatus<bool>,
+    pub auth_params: ReqStatus<AuthParams>,
     pub transactions: ReqStatus<Transactions>,
     pub accounts: ReqStatus<Accounts>,
 }
@@ -142,17 +129,16 @@ pub struct DataModel {
 impl DataModel {
     pub fn new() -> DataModel {
         DataModel {
-            auth_params: AuthParams::new().unwrap(),
-            signed_in: Ok(RespType::None),
+            auth_params: Ok(RespType::None),
             transactions: Ok(RespType::None),
             accounts: Ok(RespType::None)
         }
     }
-    fn update_in_progress(&mut self, et: EventType) {
+    fn handle_event(&mut self, et: EventType, rs: ReqStatus<Value>) {
         match et {
-            SignIn => { self.signed_in = Ok(RespType::InProgress) },
-            GetBal => { self.accounts = Ok(RespType::InProgress) },
-            GetTrans => { self.transactions = Ok(RespType::InProgress) },
+            SignIn => { self.auth_params = rs.to_state(); },
+            GetTrans => { self.transactions = rs.to_state(); },
+            GetBal => { self.accounts = rs.to_state(); }
         }
     }
 }
@@ -222,11 +208,14 @@ pub fn get_trans_cb() -> Rc<CallbackFn> {
         if add_and_poll_events(&vec![GetTrans], &app) {
             let event_map = Arc::clone(&app.event_map);
             let mut ch = ClientHandle::new().unwrap(); 
-            ch.auth_params = app.data.borrow().auth_params.clone();
-            rt::spawn(ch.get_transactions().then(move |res| {
-                event_map.update_event(GetTrans, &res);
-                Ok(())
-            }));
+            let auth = app.data.borrow().auth_params.clone();
+            if let Ok(RespType::Done(auth)) = auth {
+                ch.auth_params = auth; 
+                rt::spawn(ch.get_transactions().then(move |res| {
+                    event_map.update_event(GetTrans, &res);
+                    Ok(())
+                }));
+            }
         }
     })
 }
