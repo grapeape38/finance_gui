@@ -57,21 +57,20 @@ impl AppState {
     }
 }
 
-fn loading_comp<T, F, G>(state: &AppPtr, value: ReqStatus<T>, init: F, done: G, key_s: &'static str, loading_msg: &'static str) -> Component
- where F: Fn(&AppPtr) -> Component, G: Fn(&AppPtr, &T) -> Component {
-     match value {
-        Ok(RespType::InProgress) => 
-            new_leaf((LoadingFrame, key_s)).with_attributes(map!("label" => loading_msg.to_string())),
-        Ok(RespType::Done(ref val)) => done(state, val),
-        Err(ref e) => 
-            new_leaf((ErrorPage, key_s)).with_attributes(map!("label" => e.to_string())),
-        _ => init(state)
-     }
-}
-
 fn label_frame(text: &str, id: &str) -> Component {
     let label = new_leaf((SomeLabel, id)).with_attributes(map!("text" => text.to_string()));
     new_node(vec![label], (LabelFrame, id))
+}
+
+fn loading_comp<T, F, G>(state: &AppPtr, value: ReqStatus<T>, init: F, done: G, key_s: &'static str, loading_msg: &'static str) -> Component
+ where F: Fn(&AppPtr) -> Component, G: Fn(&AppPtr, &T) -> Component {
+     let err_s = format!("{}-error", key_s);
+     match value {
+        Ok(RespType::InProgress) => label_frame(loading_msg, key_s),
+        Ok(RespType::Done(ref val)) => done(state, val),
+        Err(ref e) => label_frame(e.as_str(), &err_s),
+        _ => init(state)
+     }
 }
 
 fn trans_row(trans: &Transaction) -> Component {

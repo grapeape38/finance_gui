@@ -48,12 +48,11 @@ trait ToState<T> where for<'de> T: Deserialize<'de>
     fn to_state(self) -> ReqStatus<T>;
 }
 
-impl<T> ToState<T> for Result<Value, String>
-    where for<'de> T: Deserialize<'de>
+impl<T> ToState<T> for Result<Value, String> where for<'de> T: Deserialize<'de>
 {
     fn to_state(self) -> ReqStatus<T> {
         self.and_then(|json|  {
-            serde_json::from_value(json.clone()).map_err(|e| e.to_string())
+            serde_json::from_value(json).map_err(|e| e.to_string())
         }).map(|obj: T| obj.into())
     }
 }
@@ -64,7 +63,8 @@ fn add_and_poll_events(events: &Vec<EventType>, app: &AppPtr) -> bool {
             return false;
         }
         events.iter().for_each(|e| {
-            emap.insert(e.clone(), Ok(RespType::InProgress));
+            emap.insert(*e, Ok(RespType::InProgress));
+            app.data.borrow_mut().update_in_progress(*e)
         });
         let app_2 = Rc::clone(&app);
         timeout_add_seconds(1, move || {
@@ -148,12 +148,13 @@ impl DataModel {
             accounts: Ok(RespType::None)
         }
     }
-    /*pub fn set_event_data(&mut self, et: &EventType, rs: ReqStatus<Value>) {
-        match *et {
-            SignIn => { },
-            _ => {}
+    fn update_in_progress(&mut self, et: EventType) {
+        match et {
+            SignIn => { self.signed_in = Ok(RespType::InProgress) },
+            GetBal => { self.accounts = Ok(RespType::InProgress) },
+            GetTrans => { self.transactions = Ok(RespType::InProgress) },
         }
-    }*/
+    }
 }
 
 trait Modify<T> {
