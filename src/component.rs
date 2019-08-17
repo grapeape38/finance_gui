@@ -238,8 +238,9 @@ impl Component {
                 comp_old.remove_highest_widgets(container_id, app);
             }
             else {
-                comp_old.children.m.iter().for_each(|(id, old_child)| {
-                    if let Some(new_child) = self.children.m.get(id) {
+                comp_old.children.v.iter().for_each(|old_id| {
+                    let old_child = &comp_old.children.m[old_id];
+                    if let Some(new_child) = self.children.m.get(old_id) {
                         new_child.render_diff(Some(old_child), new_cont_id, app);
                     }
                     else {
