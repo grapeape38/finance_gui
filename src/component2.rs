@@ -1,12 +1,8 @@
 extern crate gio;
 extern crate gtk;
 
-use crate::xml_parse::*;
-
+use crate::xml_test::*;
 use gtk::{prelude::*, Widget, Container, Builder};
-use std::ops::{Deref};
-use std::rc::Rc;
-use std::cell::RefCell;
 
 use std::collections::{HashMap};
 use std::iter::FromIterator;
@@ -19,13 +15,6 @@ macro_rules! class(
     }
 );
 
-pub struct AppState {
-    widget_map: RefCell<WidgetMap>,
-    ui_tree: RefCell<Component>
-}
-
-pub type AppPtr = Rc<AppState>;
-
 pub trait ComponentT {
     fn class() -> &'static str;
 }
@@ -36,6 +25,7 @@ pub fn new_comp<T: ComponentT>(id: &'static str) -> Component {
 
 class!(gtk::Box, "GtkBox");
 class!(gtk::Button, "GtkButton");
+class!(gtk::Frame, "GtkFrame");
 
 pub struct Component {
     pub class: String,
@@ -55,19 +45,13 @@ impl Children {
     }
 }
 
-fn add_child_maybe(widget: &Widget, container: &Container) {
+pub fn add_child_maybe(widget: &Widget, container: &Container) {
     if container.upcast_ref::<Widget>() != widget.get_parent().as_ref().unwrap_or(widget) {
         container.add(widget);
     }
 }
 
-/*fn remove_child_maybe(child: &Widget, container: &Container) {
-    if container.upcast_ref::<Widget>() == child.get_parent().as_ref().unwrap_or(child)  {
-        container.remove(child);
-    }
-}*/
-
-fn remove_widget_maybe(id: &String, app: &AppPtr) {
+pub fn remove_widget_maybe(id: &String, app: &AppPtr) {
     {
         let child = &app.widget_map.borrow()[id];
         if let Some(parent) = child.get_parent() {
@@ -77,7 +61,29 @@ fn remove_widget_maybe(id: &String, app: &AppPtr) {
     app.widget_map.borrow_mut().remove(id);
 }
 
-type WidgetMap = HashMap<String, Widget>;
+/*impl Iterator for Component {
+    type Item = Component;
+    fn next(&mut self) -> Option<Component> {
+        if self.children.v.len() == 0 {
+            None
+        }
+
+    }
+}*/
+
+struct CompIter<'a> {
+    stack: Vec<&'a Component>
+}
+
+impl CompIter<'static> { 
+    fn new() -> CompIter<'static> { 
+        CompIter { stack: Vec::new() } 
+    } 
+}
+
+
+
+
 
 impl Component {
     pub fn empty() -> Component {
@@ -102,14 +108,15 @@ impl Component {
         self
     }
 
-    pub fn build(&self) -> Widget {
+    //todo: add all components to map
+    pub fn build(&self, wmap: &mut WidgetMap) -> Widget {
         let xml_str = self.to_xml_string().expect("Error serializing to xml");
         let builder = Builder::new_from_string(&xml_str[..]);
         builder.get_object(&self.id).expect("Error getting root object")
     }
 
     pub fn add_child_widget(&self, id: &String, app: &AppPtr) {
-        let child = self.children.m[id].build();
+        let child = self.children.m[id].build(&mut app.widget_map.borrow_mut());
         {
             let parent = &app.widget_map.borrow()[&self.id];
             add_child_maybe(&child, parent.downcast_ref::<Container>().unwrap());
@@ -141,4 +148,6 @@ impl Component {
         }
     }
 }
+
+
 

@@ -3,6 +3,7 @@ mod plaid;
 mod datamodel;
 mod component;
 mod component2;
+mod xml_test;
 mod xml_parse;
 mod ewidget;
 use gui::run_app;
