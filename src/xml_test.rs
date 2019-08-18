@@ -98,7 +98,7 @@ fn rebuild(app: &AppPtr) {
     }
 }
 
-fn test_main() {
+pub fn test_main() {
     let application =
         gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
             .expect("Initialization failed...");

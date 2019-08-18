@@ -75,15 +75,11 @@ struct CompIter<'a> {
     stack: Vec<&'a Component>
 }
 
-impl CompIter<'static> { 
-    fn new() -> CompIter<'static> { 
-        CompIter { stack: Vec::new() } 
+impl<'a> CompIter<'a> { 
+    fn new(comp: &'a Component) -> CompIter<'a> { 
+        CompIter { stack: vec![comp] } 
     } 
 }
-
-
-
-
 
 impl Component {
     pub fn empty() -> Component {
