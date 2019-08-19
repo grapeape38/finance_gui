@@ -1,6 +1,6 @@
 extern crate xml;
 
-use crate::component2::{Component, Children};
+use crate::component2::{Component};
 use std::io::BufWriter;
 use xml::{EventReader, EventWriter, EmitterConfig, reader::XmlEvent, writer::events::XmlEvent as XmlEventW};
 use std::error::Error;

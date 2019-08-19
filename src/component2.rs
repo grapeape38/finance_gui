@@ -49,27 +49,10 @@ pub fn add_child_maybe(widget: &Widget, container: &Container) {
     if container.upcast_ref::<Widget>() != widget.get_parent().as_ref().unwrap_or(widget) {
         container.add(widget);
     }
-}
-
-pub fn remove_widget_maybe(id: &String, app: &AppPtr) {
-    {
-        let child = &app.widget_map.borrow()[id];
-        if let Some(parent) = child.get_parent() {
-            parent.downcast_ref::<Container>().unwrap().remove(child);
-        }
+    if !widget.is_visible() {
+        widget.show_all();
     }
-    app.widget_map.borrow_mut().remove(id);
 }
-
-/*impl Iterator for Component {
-    type Item = Component;
-    fn next(&mut self) -> Option<Component> {
-        if self.children.v.len() == 0 {
-            None
-        }
-
-    }
-}*/
 
 struct CompIter<'a> {
     stack: Vec<&'a Component>
@@ -81,6 +64,21 @@ impl<'a> CompIter<'a> {
     } 
 }
 
+impl<'a> Iterator for CompIter<'a> {
+    type Item = &'a Component;
+    fn next(&mut self) -> Option<&'a Component> {
+        match self.stack.pop() {
+            None => None,
+            Some(comp) => {
+                for c in comp.children.v.iter() {
+                    self.stack.push(&comp.children.m[c]);
+                }
+                Some(comp)
+            }
+        }
+    }
+}
+
 impl Component {
     pub fn empty() -> Component {
         Component {
@@ -89,6 +87,10 @@ impl Component {
             properties: HashMap::new(),
             children: Children::new()
         }
+    }
+    
+    fn iter(&self) -> CompIter {
+        CompIter::new(self)
     }
 
     pub fn with_props(mut self, props: HashMap<&str, &str>) -> Component {
@@ -104,44 +106,50 @@ impl Component {
         self
     }
 
-    //todo: add all components to map
-    pub fn build(&self, wmap: &mut WidgetMap) -> Widget {
+    pub fn build(&self, app: &AppPtr) {
         let xml_str = self.to_xml_string().expect("Error serializing to xml");
         let builder = Builder::new_from_string(&xml_str[..]);
-        builder.get_object(&self.id).expect("Error getting root object")
+        for c in self.iter() {
+            app.widget_map.borrow_mut().insert(c.id.clone(), builder.get_object(&c.id).
+                expect(&format!("Could not get widget {} from xml", c.id)[..]));
+        }
+    }
+
+    pub fn remove_self_widget(&self, wmap: &mut WidgetMap) {
+        println!("Removing widget {}", self.id);
+        let widget = &wmap[&self.id];
+        if let Some(parent) = widget.get_parent() {
+            parent.downcast_ref::<Container>().unwrap().remove(widget);
+        }
+        for c in self.iter() {
+            wmap.remove(&c.id);
+        }
     }
 
     pub fn add_child_widget(&self, id: &String, app: &AppPtr) {
-        let child = self.children.m[id].build(&mut app.widget_map.borrow_mut());
-        {
-            let parent = &app.widget_map.borrow()[&self.id];
-            add_child_maybe(&child, parent.downcast_ref::<Container>().unwrap());
-        }
-        app.widget_map.borrow_mut().insert(id.clone(), child);
+        self.children.m[id].build(app);
+        let parent = &app.widget_map.borrow()[&self.id];
+        let child = &app.widget_map.borrow()[id];
+        add_child_maybe(&child, parent.downcast_ref::<Container>().unwrap());
     }
 
     pub fn render_diff(&self, comp_old: &Component, app: &AppPtr)
     {
         println!("Comparing {:?} to {:?}", self.id, comp_old.id);
-        if comp_old.id != self.id {
-            remove_widget_maybe(&comp_old.id, app);
-        }
-        else {
-            comp_old.children.v.iter().for_each(|old_id| {
-                let old_child = &comp_old.children.m[old_id];
-                if let Some(new_child) = self.children.m.get(old_id) {
-                    new_child.render_diff(old_child, app);
-                }
-                else {
-                    remove_widget_maybe(&old_child.id, app);
-                }
-            });
-            self.children.m.iter().for_each(|(id, child)| {
-                if !comp_old.children.m.contains_key(id) {
-                    child.add_child_widget(id, app);
-                }
-            });
-        }
+        comp_old.children.v.iter().for_each(|old_id| {
+            let old_child = &comp_old.children.m[old_id];
+            if let Some(new_child) = self.children.m.get(old_id) {
+                new_child.render_diff(old_child, app);
+            }
+            else {
+                old_child.remove_self_widget(&mut app.widget_map.borrow_mut());
+            }
+        });
+        self.children.v.iter().for_each(|id| {
+            if !comp_old.children.m.contains_key(id) {
+                self.add_child_widget(id, app);
+            }
+        });
     }
 }
 

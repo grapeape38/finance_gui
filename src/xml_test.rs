@@ -6,8 +6,6 @@ use gio::prelude::*;
 use gtk::{prelude::*, Widget, Container, Application, ApplicationWindow};
 use std::env::args;
 use std::collections::HashMap;
-use std::thread::sleep;
-use std::time::Duration;
 use crate::component2::*;
 
 use std::rc::Rc;
@@ -47,31 +45,22 @@ pub type WidgetMap = HashMap<String, Widget>;
 pub type AppPtr = Rc<AppState>;
 
 fn build_ui(app: &AppPtr) {
-    /*let xml_string = "
-        <interface>
-            <object class='GtkBox' id='main_box'>
-                <property name='orientation'>GTK_ORIENTATION_HORIZONTAL</property>
-                <property name='spacing'>4</property>
-                <child>
-                <object class='GtkButton' id='hello_button'>
-                    <property name='label'>Hello World</property>
-                    <signal name='clicked' handler='hello_button_clicked' object='FooWidget' swapped='yes'/>
-                </object>
-                </child>
-                <child>
-                <object class='GtkButton' id='goodbye_button'>
-                    <property name='label'>Goodbye World</property>
-                </object>
-                </child>
-            </object>
-        </interface>";*/
     let window = &app.window;
     window.set_title("Finance Viewer App");
     window.set_border_width(10);
     window.set_position(gtk::WindowPosition::Center);
     window.set_default_size(350, 70);
 
-    let frame = new_comp::<gtk::Frame>("my_frame").with_props(map!("label" => "Test label"));
+    let frame = Component::from_xml_string("
+        <object class='GtkFrame' id='main_frame'>
+            <child>
+                <object class='GtkLabel' id='my_label'>
+                    <property name='label'>What's up Text</property>
+                </object>
+            </child>
+        </object>
+    ").expect("Error parsing xml");
+
     let button1 = new_comp::<gtk::Button>("hello_button").with_props(map!("label" => "Hello World"));
     let button2  = new_comp::<gtk::Button>("goodbye_button").with_props(map!("label" => "Goodbye World"));
     let root = new_comp::<gtk::Box>("main_box").with_props(map!("orientation" => "GTK_ORIENTATION_HORIZONTAL", "spacing" => "4"))
@@ -79,23 +68,36 @@ fn build_ui(app: &AppPtr) {
 
     println!("XML:\n{}", root.to_xml_string().expect("Error serializing to xml!"));
 
-    let mainbox = root.build(&mut app.widget_map.borrow_mut());
-
-    window.add(&mainbox);
+    root.build(app);
+    window.add(&app.widget_map.borrow()["main_box"]);
+    *app.ui_tree.borrow_mut() = root;
     window.show_all();
 }
 
-fn rebuild(app: &AppPtr) {
-    let ui2 = new_comp::<gtk::Button>("mybutton");
-    if app.ui_tree.borrow().id != ui2.id {
-        remove_widget_maybe(&ui2.id, app);
-        let child = ui2.build(&mut app.widget_map.borrow_mut());
-        add_child_maybe(&child, app.window.upcast_ref::<Container>());
-        app.widget_map.borrow_mut().insert(ui2.id, child);
+fn testui1() -> Component {
+    let button = new_comp::<gtk::Button>("mybutton").with_props(map!("label" => "First button haha!"));
+    let mybox = new_comp::<gtk::Box>("mybox").with_children(vec![button]);
+    mybox 
+}
+
+fn testui2() -> Component {
+    let button = new_comp::<gtk::Button>("mybutton2").with_props(map!("label" => "Second button haha!"));
+    let mybox = new_comp::<gtk::Box>("mybox").with_children(vec![button]);
+    mybox 
+}
+
+fn rebuild(app: &AppPtr, new_ui: Component) {
+    println!("New XML:\n{}", new_ui.to_xml_string().expect("Error serializing to xml!"));
+    let old_id = app.ui_tree.borrow().id.clone();
+    if old_id != new_ui.id {
+        app.ui_tree.borrow().remove_self_widget(&mut app.widget_map.borrow_mut());
+        new_ui.build(app);
+        add_child_maybe(&app.widget_map.borrow()[&new_ui.id], app.window.upcast_ref::<Container>());
     }
     else {
-        ui2.render_diff(&app.ui_tree.borrow(), app);
+        new_ui.render_diff(&app.ui_tree.borrow(), app);
     }
+    *app.ui_tree.borrow_mut() = new_ui;
 }
 
 pub fn test_main() {
@@ -103,10 +105,10 @@ pub fn test_main() {
         gtk::Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
             .expect("Initialization failed...");
     application.connect_activate(move |app| {
-        let ap = AppState::new_ptr(app);
-        build_ui(&ap);
-        /*sleep(Duration::from_millis(2000));
-        rebuild(&ap);*/
+        let app_state = AppState::new_ptr(app);
+        build_ui(&app_state);
+        rebuild(&app_state, testui1());
+        rebuild(&app_state, testui2());
     });
     application.run(&args().collect::<Vec<_>>());
 }
